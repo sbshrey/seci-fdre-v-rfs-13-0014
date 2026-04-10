@@ -413,12 +413,37 @@ th.number {
   padding: 1rem;
 }
 
+.dashboard-job-card {
+  background:
+    radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 28%),
+    linear-gradient(180deg, #ffffff, #f8fafc);
+}
+
+.dashboard-job-pct {
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.dashboard-job-run,
+.dashboard-job-detail {
+  margin: 0;
+}
+
+.progress-bar-wide {
+  margin-top: 0.75rem;
+}
+
 .progress-job-line {
   display: flex;
   justify-content: space-between;
   gap: 0.75rem;
   align-items: center;
   margin: 0.55rem 0 0;
+}
+
+.progress-case-line,
+.dashboard-job-cases {
+  margin: 0.35rem 0 0;
 }
 
 .action-row-tight {

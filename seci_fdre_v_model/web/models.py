@@ -97,6 +97,9 @@ class BackgroundJob:
     stage: str
     pct: float
     detail: str
+    completed_cases: int | None
+    total_cases: int | None
+    current_case_id: str | None
     started_at: str | None
     updated_at: str | None
     finished_at: str | None

@@ -42,6 +42,46 @@
   </aside>
 
   <section class="content-column">
+    <article class="panel dashboard-job-card" data-dashboard-job-card {% if not current_job %}hidden{% endif %}>
+      <div class="panel-header">
+        <div>
+          <p class="eyebrow">Background Job</p>
+          <h3 data-dashboard-job-stage>{% if current_job %}{{ current_job.stage }}{% else %}No active job{% endif %}</h3>
+        </div>
+        <div class="action-row action-row-tight">
+          <strong class="dashboard-job-pct" data-dashboard-job-pct>{% if current_job %}{{ "%.0f"|format(current_job.pct) }}%{% else %}0%{% endif %}</strong>
+          <div class="status-pill status-{% if current_job %}{{ current_job.status }}{% else %}completed{% endif %}" data-dashboard-job-status>
+            {% if current_job %}{{ current_job.status }}{% else %}idle{% endif %}
+          </div>
+        </div>
+      </div>
+      <p class="section-note dashboard-job-run" data-dashboard-job-run-id>
+        {% if current_job and current_job.run_id %}Run {{ current_job.run_id }}{% else %}No active run{% endif %}
+      </p>
+      <p class="section-note dashboard-job-cases" data-dashboard-job-cases {% if not current_job or current_job.completed_cases is none or current_job.total_cases is none %}hidden{% endif %}>
+        {% if current_job and current_job.completed_cases is not none and current_job.total_cases is not none %}
+          {{ current_job.stage }} • {{ current_job.completed_cases }}/{{ current_job.total_cases }} cases
+        {% endif %}
+      </p>
+      <div class="progress-bar progress-bar-wide">
+        <div class="progress-fill" data-dashboard-job-fill style="width: {% if current_job %}{{ current_job.pct }}{% else %}0{% endif %}%"></div>
+      </div>
+      <p class="dashboard-job-detail" data-dashboard-job-detail>
+        {% if current_job %}{{ current_job.detail }}{% else %}Waiting to start.{% endif %}
+      </p>
+      <div class="action-row action-row-tight">
+        <a class="button-link" data-dashboard-job-open {% if not current_job or not current_job.run_id %}hidden{% endif %} href="{% if current_job and current_job.run_id %}{{ url_for('run_dashboard', run_id=current_job.run_id) }}{% else %}#{% endif %}">Open run</a>
+        <form method="post" action="{{ url_for('cancel_current_job') }}" data-dashboard-job-cancel {% if not current_job or not current_job.is_active %}hidden{% endif %}>
+          <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
+          <button class="button button-danger" type="submit">Stop job</button>
+        </form>
+        <form method="post" data-dashboard-job-delete {% if not current_job or current_job.is_active or not current_job.run_id %}hidden{% endif %} action="{% if current_job and current_job.run_id %}{{ url_for('delete_run', run_id=current_job.run_id) }}{% endif %}">
+          <input type="hidden" name="next" value="{{ url_for('runs_page') }}">
+          <button class="button button-danger button-subtle" type="submit">Delete run</button>
+        </form>
+      </div>
+    </article>
+
     {% if not selected_run %}
       <article class="panel empty-panel">
         <h3>No run selected</h3>

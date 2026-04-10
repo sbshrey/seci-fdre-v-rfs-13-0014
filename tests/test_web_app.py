@@ -151,10 +151,10 @@ def test_single_background_job_cancel_and_delete(tmp_path: Path, monkeypatch) ->
     client = app.test_client()
 
     def fake_execute_run_snapshot(*args, progress_callback=None, **kwargs):
-        for index in range(100):
+        for index in range(1, 101):
             if progress_callback is not None:
-                progress_callback("Simulating", float(index), f"tick {index}")
-            time.sleep(0.02)
+                progress_callback("Sensitivity cases", 40.0 + (index / 100.0) * 20.0, f"Processed case_{index} ({index}/10)")
+            time.sleep(0.05)
         raise AssertionError("expected cancellation before fake run completed")
 
     monkeypatch.setattr("seci_fdre_v_model.web.app.execute_run_snapshot", fake_execute_run_snapshot)
@@ -166,7 +166,16 @@ def test_single_background_job_cancel_and_delete(tmp_path: Path, monkeypatch) ->
     running_payload = client.get("/api/job-status").get_json()
     assert running_payload["job"] is not None
     assert running_payload["job"]["is_active"] is True
+    assert running_payload["job"]["stage"] == "Sensitivity cases"
+    assert running_payload["job"]["completed_cases"] is not None
+    assert running_payload["job"]["total_cases"] == 10
     run_id = running_payload["job"]["run_id"]
+
+    running_dashboard = client.get(f"/runs/{run_id}")
+    assert running_dashboard.status_code == 200
+    assert b"Background Job" in running_dashboard.data
+    assert b"data-dashboard-job-card" in running_dashboard.data
+    assert b"data-dashboard-job-cases" in running_dashboard.data
 
     second_start = client.post("/runs/study", data={"next": "/runs"}, follow_redirects=True)
     assert second_start.status_code == 200

@@ -33,6 +33,11 @@
             {% if current_job %}{{ current_job.status }}{% else %}idle{% endif %}
           </span>
         </p>
+        <p class="section-note progress-case-line" data-progress-cases {% if not current_job or current_job.completed_cases is none or current_job.total_cases is none %}hidden{% endif %}>
+          {% if current_job and current_job.completed_cases is not none and current_job.total_cases is not none %}
+            {{ current_job.stage }} • {{ current_job.completed_cases }}/{{ current_job.total_cases }} cases
+          {% endif %}
+        </p>
         <div class="progress-bar">
           <div class="progress-fill" data-progress-fill style="width: {% if current_job %}{{ current_job.pct }}{% else %}0{% endif %}%"></div>
         </div>

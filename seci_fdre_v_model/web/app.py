@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import threading
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -95,6 +96,9 @@ class StudyJobManager:
                 stage="Queued",
                 pct=0.0,
                 detail="Study queued in the background.",
+                completed_cases=None,
+                total_cases=None,
+                current_case_id=None,
                 started_at=_iso_now(),
                 updated_at=_iso_now(),
                 finished_at=None,
@@ -189,6 +193,9 @@ class StudyJobManager:
                 status="cancelling",
                 stage="Cancelling",
                 detail="Cancellation requested. Waiting for the current step to stop.",
+                completed_cases=None,
+                total_cases=None,
+                current_case_id=None,
                 cancel_requested=True,
                 updated_at=_iso_now(),
             )
@@ -217,12 +224,18 @@ class StudyJobManager:
         with self._lock:
             if self._job is None:
                 return
+            next_stage = stage or self._job.stage
+            next_detail = detail or self._job.detail
+            completed_cases, total_cases, current_case_id = _parse_case_progress(next_stage, next_detail)
             self._job = replace(
                 self._job,
                 status=status or self._job.status,
-                stage=stage or self._job.stage,
+                stage=next_stage,
                 pct=float(self._job.pct if pct is None else pct),
-                detail=detail or self._job.detail,
+                detail=next_detail,
+                completed_cases=completed_cases,
+                total_cases=total_cases,
+                current_case_id=current_case_id,
                 finished_at=finished_at if finished_at is not None else self._job.finished_at,
                 error=error if error is not None else self._job.error,
                 updated_at=_iso_now(),
@@ -231,6 +244,16 @@ class StudyJobManager:
 
 def _iso_now() -> str:
     return datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _parse_case_progress(stage: str, detail: str) -> tuple[int | None, int | None, str | None]:
+    if stage not in {"Sensitivity cases", "Sensitivity cross"}:
+        return None, None, None
+    match = re.search(r"Processed\s+(.+?)\s+\((\d+)/(\d+)\)", detail)
+    if not match:
+        return None, None, None
+    case_id, completed, total = match.groups()
+    return int(completed), int(total), case_id
 
 
 def create_app(
@@ -374,6 +397,9 @@ def create_app(
                     "stage": job.stage,
                     "pct": job.pct,
                     "detail": job.detail,
+                    "completed_cases": job.completed_cases,
+                    "total_cases": job.total_cases,
+                    "current_case_id": job.current_case_id,
                     "started_at": job.started_at,
                     "updated_at": job.updated_at,
                     "finished_at": job.finished_at,
