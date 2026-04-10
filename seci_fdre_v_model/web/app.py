@@ -22,6 +22,7 @@ from flask import (
     url_for,
 )
 
+from seci_fdre_v_model.profile_templates import SUPPORTED_TENDER_PROFILES
 from seci_fdre_v_model.web.services import (
     artifact_label,
     build_dataset_chart_cards,
@@ -44,6 +45,26 @@ from seci_fdre_v_model.web.services import (
     save_project_form,
     store_uploaded_input,
 )
+
+CONFIG_SELECT_OPTIONS = {
+    "simulation.preprocessing.frequency": [("1m", "1 minute")],
+    "simulation.preprocessing.gap_fill": [
+        ("linear_interpolate", "Linear interpolate"),
+        ("zero", "Zero fill"),
+    ],
+    "simulation.preprocessing.simulation_dtype": [
+        ("float32", "float32"),
+        ("float64", "float64"),
+    ],
+    "simulation.load.profile_mode": [
+        ("template", "Template"),
+        ("flat", "Flat"),
+    ],
+    "simulation.load.profile_template_id": [
+        (template_id, template.source_doc)
+        for template_id, template in SUPPORTED_TENDER_PROFILES.items()
+    ],
+}
 
 
 def create_app(
@@ -89,6 +110,7 @@ def create_app(
             "config.html",
             active_page="config",
             project=project,
+            select_options=CONFIG_SELECT_OPTIONS,
         )
 
     @app.post("/config/save")

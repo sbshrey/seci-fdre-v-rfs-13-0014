@@ -73,6 +73,18 @@ def test_web_control_room_flow(tmp_path: Path) -> None:
     assert b"Workspace Input Files" in response.data
     assert (workspace_root / "inputs" / "solar.csv").exists()
 
+    config_response = client.get("/config")
+    assert config_response.status_code == 200
+    assert b'<select name="simulation.preprocessing.gap_fill">' in config_response.data
+    assert b'<select name="simulation.preprocessing.simulation_dtype">' in config_response.data
+    assert b'name="simulation.load.profile_mode"' in config_response.data
+    assert b'data-profile-mode-select' in config_response.data
+    assert b'data-template-only' in config_response.data
+    assert b'data-flat-only' in config_response.data
+    assert b'disabled' in config_response.data
+    assert b'Linear interpolate' in config_response.data
+    assert b'float64' in config_response.data
+
     upload_response = client.post(
         "/inputs/upload/solar",
         data={
@@ -127,6 +139,51 @@ def test_web_control_room_flow(tmp_path: Path) -> None:
     artifact_response = client.get(f"/runs/{run_id}/artifacts/base_summary.csv")
     assert artifact_response.status_code == 200
     assert b"plant_name" in artifact_response.data
+
+
+def test_profile_mode_fields_toggle_and_save(tmp_path: Path) -> None:
+    source_config = _write_project_config(tmp_path)
+    workspace = ensure_workspace_ready(tmp_path / ".workspace", source_config_path=source_config)
+
+    flat_project = save_project_form(
+        workspace,
+        {
+            "project.plant_name": "flat_plant",
+            "project.simulation_start": "2025-01-01 00:00",
+            "project.simulation_end": "2025-01-01 00:05",
+            "simulation.data.solar_enabled": "on",
+            "simulation.data.wind_enabled": "on",
+            "simulation.preprocessing.frequency": "1m",
+            "simulation.preprocessing.gap_fill": "zero",
+            "simulation.preprocessing.max_interpolation_gap_minutes": "15",
+            "simulation.preprocessing.simulation_dtype": "float64",
+            "simulation.grid.export_limit_kw": "1000.0",
+            "simulation.grid.import_limit_kw": "",
+            "simulation.load.profile_mode": "flat",
+            "simulation.load.output_profile_kw": "275.0",
+            "simulation.load.aux_consumption_kw": "10.0",
+            "simulation.battery.nominal_power_kw": "100.0",
+            "simulation.battery.duration_hours": "1.0",
+            "simulation.battery.charge_efficiency": "1.0",
+            "simulation.battery.discharge_efficiency": "1.0",
+            "simulation.battery.degradation_per_cycle": "0.0",
+            "simulation.battery.initial_soc_fraction": "0.5",
+            "simulation.battery.min_soc_fraction": "0.0",
+            "simulation.battery.max_soc_fraction": "1.0",
+            "simulation.battery.charge_loss_table": "0.0: 0.0\n1.0: 0.0",
+            "simulation.battery.discharge_loss_table": "0.0: 0.0\n1.0: 0.0",
+            "sensitivity.wind_multipliers": "1.0, 1.1",
+            "sensitivity.solar_multipliers": "1.0, 1.1",
+            "sensitivity.profile_multipliers": "1.0, 1.1",
+            "sensitivity.battery_capacity_kwh_values": "100.0, 200.0",
+            "sensitivity.battery_duration_hour_values": "1.0, 2.0",
+        },
+    )
+
+    assert flat_project.simulation.load.profile_mode == "flat"
+    assert flat_project.simulation.load.output_profile_kw == 275.0
+    assert flat_project.simulation.load.profile_template_id == "seci_fdre_v_amendment_03"
+    assert flat_project.simulation.load.contracted_capacity_mw == 0.1
 
 
 def _write_project_config(tmp_path: Path) -> Path:

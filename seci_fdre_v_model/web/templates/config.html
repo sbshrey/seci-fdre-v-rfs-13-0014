@@ -14,7 +14,7 @@
   </div>
 </section>
 
-<form method="post" action="{{ url_for('save_config') }}" class="config-form">
+<form method="post" action="{{ url_for('save_config') }}" class="config-form" data-config-form>
   <section class="panel form-section">
     <div class="panel-header"><h3>Project</h3></div>
     <div class="form-grid">
@@ -46,11 +46,19 @@
       </label>
       <label>
         <span>Frequency</span>
-        <input type="text" name="simulation.preprocessing.frequency" value="{{ project.simulation.preprocessing.frequency }}">
+        <select name="simulation.preprocessing.frequency">
+          {% for value, label in select_options["simulation.preprocessing.frequency"] %}
+            <option value="{{ value }}" {% if project.simulation.preprocessing.frequency == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
       </label>
       <label>
         <span>Gap Fill</span>
-        <input type="text" name="simulation.preprocessing.gap_fill" value="{{ project.simulation.preprocessing.gap_fill }}">
+        <select name="simulation.preprocessing.gap_fill">
+          {% for value, label in select_options["simulation.preprocessing.gap_fill"] %}
+            <option value="{{ value }}" {% if project.simulation.preprocessing.gap_fill == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
       </label>
       <label>
         <span>Max Interpolation Gap (min)</span>
@@ -62,12 +70,16 @@
       </label>
       <label>
         <span>Simulation DType</span>
-        <input type="text" name="simulation.preprocessing.simulation_dtype" value="{{ project.simulation.preprocessing.simulation_dtype }}">
+        <select name="simulation.preprocessing.simulation_dtype">
+          {% for value, label in select_options["simulation.preprocessing.simulation_dtype"] %}
+            <option value="{{ value }}" {% if project.simulation.preprocessing.simulation_dtype == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
       </label>
     </div>
   </section>
 
-  <section class="panel form-section">
+  <section class="panel form-section" data-profile-mode-panel>
     <div class="panel-header"><h3>Grid and Load</h3></div>
     <div class="form-grid">
       <label>
@@ -78,21 +90,50 @@
         <span>Import Limit (kW)</span>
         <input type="number" step="any" name="simulation.grid.import_limit_kw" value="{{ '' if project.simulation.grid.import_limit_kw is none else project.simulation.grid.import_limit_kw }}">
       </label>
-      <label>
+      <label data-mode-field="profile_mode">
         <span>Profile Mode</span>
-        <input type="text" name="simulation.load.profile_mode" value="{{ project.simulation.load.profile_mode }}">
+        <select name="simulation.load.profile_mode" data-profile-mode-select>
+          {% for value, label in select_options["simulation.load.profile_mode"] %}
+            <option value="{{ value }}" {% if project.simulation.load.profile_mode == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
       </label>
-      <label>
+      <label
+        data-mode-field="template_only"
+        class="{% if project.simulation.load.profile_mode == 'flat' %}mode-field-disabled{% else %}mode-field-active{% endif %}">
         <span>Profile Template ID</span>
-        <input type="text" name="simulation.load.profile_template_id" value="{{ project.simulation.load.profile_template_id or '' }}">
+        <select
+          name="simulation.load.profile_template_id"
+          data-template-only
+          {% if project.simulation.load.profile_mode == 'flat' %}disabled{% endif %}>
+          {% for value, label in select_options["simulation.load.profile_template_id"] %}
+            <option value="{{ value }}" {% if project.simulation.load.profile_template_id == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
       </label>
-      <label>
+      <label
+        data-mode-field="template_only"
+        class="{% if project.simulation.load.profile_mode == 'flat' %}mode-field-disabled{% else %}mode-field-active{% endif %}">
         <span>Contracted Capacity (MW)</span>
-        <input type="number" step="any" name="simulation.load.contracted_capacity_mw" value="{{ '' if project.simulation.load.contracted_capacity_mw is none else project.simulation.load.contracted_capacity_mw }}">
+        <input
+          type="number"
+          step="any"
+          name="simulation.load.contracted_capacity_mw"
+          value="{{ '' if project.simulation.load.contracted_capacity_mw is none else project.simulation.load.contracted_capacity_mw }}"
+          data-template-only
+          {% if project.simulation.load.profile_mode == 'flat' %}disabled{% endif %}>
       </label>
-      <label>
+      <label
+        data-mode-field="flat_only"
+        class="{% if project.simulation.load.profile_mode == 'flat' %}mode-field-active{% else %}mode-field-disabled{% endif %}">
         <span>Output Profile (kW)</span>
-        <input type="number" step="any" name="simulation.load.output_profile_kw" value="{{ '' if project.simulation.load.output_profile_kw is none else project.simulation.load.output_profile_kw }}">
+        <input
+          type="number"
+          step="any"
+          name="simulation.load.output_profile_kw"
+          value="{{ '' if project.simulation.load.output_profile_kw is none else project.simulation.load.output_profile_kw }}"
+          data-flat-only
+          {% if project.simulation.load.profile_mode != 'flat' %}disabled{% endif %}>
       </label>
       <label>
         <span>Aux Consumption (kW)</span>

@@ -106,6 +106,41 @@ async function handleChartDatasetClick(event) {
   renderChartCards(cards);
 }
 
+function syncProfileModeFields(mode) {
+  const templateOnlyFields = document.querySelectorAll("[data-template-only]");
+  const flatOnlyFields = document.querySelectorAll("[data-flat-only]");
+  const templateLabels = document.querySelectorAll('[data-mode-field="template_only"]');
+  const flatLabels = document.querySelectorAll('[data-mode-field="flat_only"]');
+
+  const isFlat = mode === "flat";
+
+  templateOnlyFields.forEach((field) => {
+    field.disabled = isFlat;
+  });
+  flatOnlyFields.forEach((field) => {
+    field.disabled = !isFlat;
+  });
+
+  templateLabels.forEach((label) => {
+    label.classList.toggle("mode-field-disabled", isFlat);
+    label.classList.toggle("mode-field-active", !isFlat);
+  });
+  flatLabels.forEach((label) => {
+    label.classList.toggle("mode-field-disabled", !isFlat);
+    label.classList.toggle("mode-field-active", isFlat);
+  });
+}
+
+function setupProfileModeControls() {
+  const modeSelect = document.querySelector("[data-profile-mode-select]");
+  if (!modeSelect) return;
+
+  syncProfileModeFields(modeSelect.value);
+  modeSelect.addEventListener("change", () => {
+    syncProfileModeFields(modeSelect.value);
+  });
+}
+
 document.querySelectorAll("[data-study-form]").forEach((form) => {
   form.addEventListener("submit", handleStudySubmit);
 });
@@ -113,3 +148,5 @@ document.querySelectorAll("[data-study-form]").forEach((form) => {
 document.querySelectorAll("[data-chart-dataset]").forEach((button) => {
   button.addEventListener("click", handleChartDatasetClick);
 });
+
+setupProfileModeControls();

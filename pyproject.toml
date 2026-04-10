@@ -32,7 +32,12 @@ include-package-data = true
 include = ["seci_fdre_v_model*"]
 
 [tool.setuptools.package-data]
-"seci_fdre_v_model" = ["profile_assets/*.csv"]
+"seci_fdre_v_model" = [
+  "profile_assets/*.csv",
+  "web/templates/*.html",
+  "web/static/*.css",
+  "web/static/*.js",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

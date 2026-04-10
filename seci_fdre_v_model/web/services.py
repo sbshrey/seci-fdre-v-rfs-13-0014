@@ -919,7 +919,19 @@ def _resolve_workspace_root(workspace_root: str | Path | None) -> Path:
 def _resolve_source_config_path(path: str | Path | None) -> Path:
     if path is not None:
         return Path(path).expanduser().resolve()
-    return (_repo_root() / "config" / "project.yaml").resolve()
+    env_path = os.environ.get("SECI_FDRE_V_SOURCE_CONFIG")
+    if env_path:
+        return Path(env_path).expanduser().resolve()
+
+    candidates = [
+        Path.cwd() / "config" / "project.yaml",
+        _repo_root() / "config" / "project.yaml",
+    ]
+    for candidate in candidates:
+        resolved = candidate.expanduser().resolve()
+        if resolved.exists():
+            return resolved
+    return candidates[0].expanduser().resolve()
 
 
 def _repo_root() -> Path:
