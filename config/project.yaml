@@ -1,0 +1,61 @@
+project:
+  plant_name: seci_fdre_v_sample
+  output_dir: output
+  simulation_start: "2025-01-01 00:00"
+  simulation_end: "2025-12-31 23:59"
+
+inputs:
+  solar_path: ../data/Solar_2025-01-01_data_.csv
+  wind_path: ../data/Wind_2025_01-01_data_.csv
+  output_profile_path: ../data/seci_fdre_v_amendment_03_output_profile.csv
+  output_profile_18_22_path: ../data/seci_fdre_v_amendment_03_output_profile_18_22.csv
+  aux_power_path: ../data/aux_power_profile.csv
+
+simulation:
+  data:
+    solar_enabled: true
+    wind_enabled: true
+  preprocessing:
+    frequency: 1m
+    gap_fill: zero
+    max_interpolation_gap_minutes: 15
+    align_to_full_year: true
+    simulation_dtype: float64
+  grid:
+    export_limit_kw: 1000.0
+    import_limit_kw: null
+  load:
+    profile_mode: template
+    profile_template_id: seci_fdre_v_amendment_03
+    contracted_capacity_mw: 1.0
+    aux_consumption_kw: 20.0
+  battery:
+    nominal_power_kw: 500.0
+    duration_hours: 2.0
+    charge_efficiency: 0.96
+    discharge_efficiency: 0.94
+    degradation_per_cycle: 0.0002739726027
+    initial_soc_fraction: 0.5
+    min_soc_fraction: 0.0
+    max_soc_fraction: 1.0
+    charge_loss_table:
+      0.0: 0.0
+      0.2: 0.04
+      0.3: 0.045
+      0.5: 0.07
+      1.0: 0.11
+      1.2: 0.14
+    discharge_loss_table:
+      0.0: 0.0
+      0.2: 0.023
+      0.3: 0.032
+      0.5: 0.042
+      1.0: 0.062
+      1.2: 0.067
+
+sensitivity:
+  wind_multipliers: [0.9, 1.0, 1.1]
+  solar_multipliers: [0.9, 1.0, 1.1]
+  profile_multipliers: [0.9, 1.0, 1.1]
+  battery_capacity_kwh_values: [500.0, 1000.0, 1500.0]
+  battery_duration_hour_values: [2.0, 4.0]

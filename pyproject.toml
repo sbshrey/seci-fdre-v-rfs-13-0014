@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seci-fdre-v-model"
+version = "0.1.0"
+description = "SECI FDRE-V BESS model with tender-derived input generation and sensitivity reporting."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=2.0.0",
+  "polars>=1.22.0",
+  "PyYAML>=6.0.2",
+  "xlsxwriter>=3.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.0",
+]
+
+[project.scripts]
+seci-fdre-v-model = "seci_fdre_v_model.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["seci_fdre_v_model*"]
+
+[tool.setuptools.package-data]
+"seci_fdre_v_model" = ["profile_assets/*.csv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

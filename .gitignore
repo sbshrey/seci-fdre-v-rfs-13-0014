@@ -144,6 +144,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# Local generated study outputs
+output/
+
 # Spyder project settings
 .spyderproject
 .spyproject
