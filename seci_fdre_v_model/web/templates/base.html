@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}SECI FDRE-V Control Room{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Docker Compose Control Room</p>
+        <h1><a href="{{ url_for('index') }}">SECI FDRE-V Local Workspace</a></h1>
+        <p class="workspace-note">{{ workspace_root }}</p>
+      </div>
+      <nav class="topnav">
+        <a href="{{ url_for('index') }}" class="{% if active_page == 'dashboard' %}active{% endif %}">Dashboard</a>
+        <a href="{{ url_for('config_page') }}" class="{% if active_page == 'config' %}active{% endif %}">Config</a>
+        <a href="{{ url_for('inputs_page') }}" class="{% if active_page == 'inputs' %}active{% endif %}">Inputs</a>
+        <a href="{{ url_for('runs_page') }}" class="{% if active_page == 'runs' %}active{% endif %}">History</a>
+      </nav>
+    </header>
+
+    <section class="progress-shell" data-progress-shell hidden>
+      <div class="progress-card">
+        <div class="progress-head">
+          <strong data-progress-stage>Preparing run…</strong>
+          <span data-progress-pct>0%</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" data-progress-fill></div>
+        </div>
+        <p data-progress-detail>Waiting to start.</p>
+      </div>
+    </section>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <section class="flash-stack">
+          {% for category, message in messages %}
+            <div class="flash flash-{{ category }}">{{ message }}</div>
+          {% endfor %}
+        </section>
+      {% endif %}
+    {% endwith %}
+
+    <main class="page-shell">
+      {% block content %}{% endblock %}
+    </main>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>

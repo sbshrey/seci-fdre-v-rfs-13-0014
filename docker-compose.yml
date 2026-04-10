@@ -1,0 +1,9 @@
+services:
+  web:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      SECI_FDRE_V_WORKSPACE: /workspace
+    volumes:
+      - ./.workspace:/workspace

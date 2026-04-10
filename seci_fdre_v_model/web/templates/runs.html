@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}History | SECI FDRE-V Control Room{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">History</p>
+    <h2>Run History</h2>
+    <p class="section-note">Immutable run packages stored under the workspace `runs/` directory.</p>
+  </div>
+  <div class="action-row">
+    <form method="post" action="{{ url_for('run_study_stream') }}" data-study-form>
+      <button class="button" type="submit">Run Study</button>
+    </form>
+  </div>
+</section>
+
+<article class="panel">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Run ID</th>
+          <th>Status</th>
+          <th>Plant</th>
+          <th>Started</th>
+          <th>Finished</th>
+          <th>Artifacts</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in run_records %}
+          <tr>
+            <td><a class="button-link" href="{{ url_for('run_dashboard', run_id=run.run_id) }}">{{ run.run_id }}</a></td>
+            <td>{{ run.status }}</td>
+            <td>{{ run.plant_name }}</td>
+            <td>{{ run.started_at }}</td>
+            <td>{{ run.finished_at or '—' }}</td>
+            <td>{{ run.artifacts | length }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</article>
+{% endblock %}

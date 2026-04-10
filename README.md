@@ -1,6 +1,6 @@
 # SECI FDRE-V BESS Model
 
-CLI-first Python implementation of the SECI FDRE-V BESS model in this repo.
+Local SECI FDRE-V study runner with both a CLI workflow and a Docker Compose control-room web UI.
 
 ## What It Does
 
@@ -25,6 +25,35 @@ pip install -e .[dev]
 python main.py generate-input-files --config config/project.yaml
 python main.py run --config config/project.yaml
 ```
+
+## Local Control Room
+
+The repo now includes a single-user local web application that manages a persistent workspace, uploads and downloads active input files, runs the full study into immutable run directories, and visualizes outputs as tables and charts.
+
+Start it directly:
+
+```bash
+source .venv/bin/activate
+seci-fdre-v-web --host 127.0.0.1 --port 5000
+```
+
+Or with Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+The app uses `SECI_FDRE_V_WORKSPACE` when set. By default it creates a local `.workspace/` directory with:
+
+- `config/project.yaml`
+- `inputs/`
+- `runs/<run_id>/`
+
+Each run stores:
+
+- a config snapshot,
+- the exact input files used,
+- a `package/` directory with summaries, tables, parquet output, workbook, and zip archive.
 
 ## Config
 
@@ -51,3 +80,5 @@ Each run writes to `output/<plant_name>/`:
 - `profile_files_index.csv`
 - `<plant_name>.xlsx`
 - `<plant_name>.zip`
+
+The control-room workflow writes immutable run packages to `.workspace/runs/<run_id>/package/` instead of overwriting prior runs.

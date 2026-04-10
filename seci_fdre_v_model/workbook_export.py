@@ -16,18 +16,37 @@ PACKAGE_SHEETS: tuple[tuple[str, str], ...] = (
 )
 
 
-def export_study_workbook(input_dir: str | Path, *, output: str | Path | None = None) -> tuple[Path, Path]:
+def export_study_workbook(
+    input_dir: str | Path,
+    *,
+    output: str | Path | None = None,
+    archive_output: str | Path | None = None,
+) -> tuple[Path, Path]:
     package_dir = Path(input_dir).expanduser().resolve()
     if not package_dir.exists():
         raise FileNotFoundError(f"Study package directory not found: {package_dir}")
     workbook_path = _resolve_output_path(package_dir, output)
     _write_workbook([(sheet_name, pl.read_csv(package_dir / filename)) for sheet_name, filename in PACKAGE_SHEETS], workbook_path)
-    return workbook_path, refresh_package_archive(package_dir)
+    return workbook_path, refresh_package_archive(package_dir, output=archive_output)
 
 
-def refresh_package_archive(package_dir: str | Path) -> Path:
+def refresh_package_archive(package_dir: str | Path, *, output: str | Path | None = None) -> Path:
     package_path = Path(package_dir).expanduser().resolve()
-    return Path(shutil.make_archive(str(package_path), "zip", root_dir=str(package_path.parent), base_dir=package_path.name))
+    archive_path = _resolve_archive_path(package_path, output)
+    base_name = archive_path.with_suffix("")
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    created_path = Path(
+        shutil.make_archive(
+            str(base_name),
+            "zip",
+            root_dir=str(package_path.parent),
+            base_dir=package_path.name,
+        )
+    )
+    if created_path != archive_path:
+        archive_path.write_bytes(created_path.read_bytes())
+        created_path.unlink()
+    return archive_path
 
 
 def _resolve_output_path(package_dir: Path, output: str | Path | None) -> Path:
@@ -35,6 +54,13 @@ def _resolve_output_path(package_dir: Path, output: str | Path | None) -> Path:
     output_path = output_path.expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     return output_path
+
+
+def _resolve_archive_path(package_dir: Path, output: str | Path | None) -> Path:
+    archive_path = package_dir.parent / f"{package_dir.name}.zip" if output is None else (Path(output) if Path(output).is_absolute() else package_dir / Path(output))
+    archive_path = archive_path.expanduser().resolve()
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    return archive_path
 
 
 def _write_workbook(sheet_frames: list[tuple[str, pl.DataFrame]], workbook_path: Path) -> None:

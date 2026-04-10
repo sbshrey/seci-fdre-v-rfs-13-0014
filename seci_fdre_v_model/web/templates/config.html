@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block title %}Config | SECI FDRE-V Control Room{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Configuration</p>
+    <h2>Project Settings</h2>
+    <p class="section-note">Form-only editing for the workspace copy of `project.yaml`.</p>
+  </div>
+  <div class="action-row">
+    <form method="post" action="{{ url_for('run_study_stream') }}" data-study-form>
+      <button class="button" type="submit">Run Study</button>
+    </form>
+  </div>
+</section>
+
+<form method="post" action="{{ url_for('save_config') }}" class="config-form">
+  <section class="panel form-section">
+    <div class="panel-header"><h3>Project</h3></div>
+    <div class="form-grid">
+      <label>
+        <span>Plant Name</span>
+        <input type="text" name="project.plant_name" value="{{ project.project.plant_name }}">
+      </label>
+      <label>
+        <span>Simulation Start</span>
+        <input type="text" name="project.simulation_start" value="{{ project.project.simulation_start.strftime('%Y-%m-%d %H:%M') }}">
+      </label>
+      <label>
+        <span>Simulation End</span>
+        <input type="text" name="project.simulation_end" value="{{ project.project.simulation_end.strftime('%Y-%m-%d %H:%M') }}">
+      </label>
+    </div>
+  </section>
+
+  <section class="panel form-section">
+    <div class="panel-header"><h3>Data and Preprocessing</h3></div>
+    <div class="form-grid">
+      <label class="checkbox-label">
+        <input type="checkbox" name="simulation.data.solar_enabled" {% if project.simulation.data.solar_enabled %}checked{% endif %}>
+        <span>Enable solar input</span>
+      </label>
+      <label class="checkbox-label">
+        <input type="checkbox" name="simulation.data.wind_enabled" {% if project.simulation.data.wind_enabled %}checked{% endif %}>
+        <span>Enable wind input</span>
+      </label>
+      <label>
+        <span>Frequency</span>
+        <input type="text" name="simulation.preprocessing.frequency" value="{{ project.simulation.preprocessing.frequency }}">
+      </label>
+      <label>
+        <span>Gap Fill</span>
+        <input type="text" name="simulation.preprocessing.gap_fill" value="{{ project.simulation.preprocessing.gap_fill }}">
+      </label>
+      <label>
+        <span>Max Interpolation Gap (min)</span>
+        <input type="number" name="simulation.preprocessing.max_interpolation_gap_minutes" value="{{ project.simulation.preprocessing.max_interpolation_gap_minutes }}">
+      </label>
+      <label class="checkbox-label">
+        <input type="checkbox" name="simulation.preprocessing.align_to_full_year" {% if project.simulation.preprocessing.align_to_full_year %}checked{% endif %}>
+        <span>Align to full year</span>
+      </label>
+      <label>
+        <span>Simulation DType</span>
+        <input type="text" name="simulation.preprocessing.simulation_dtype" value="{{ project.simulation.preprocessing.simulation_dtype }}">
+      </label>
+    </div>
+  </section>
+
+  <section class="panel form-section">
+    <div class="panel-header"><h3>Grid and Load</h3></div>
+    <div class="form-grid">
+      <label>
+        <span>Export Limit (kW)</span>
+        <input type="number" step="any" name="simulation.grid.export_limit_kw" value="{{ project.simulation.grid.export_limit_kw }}">
+      </label>
+      <label>
+        <span>Import Limit (kW)</span>
+        <input type="number" step="any" name="simulation.grid.import_limit_kw" value="{{ '' if project.simulation.grid.import_limit_kw is none else project.simulation.grid.import_limit_kw }}">
+      </label>
+      <label>
+        <span>Profile Mode</span>
+        <input type="text" name="simulation.load.profile_mode" value="{{ project.simulation.load.profile_mode }}">
+      </label>
+      <label>
+        <span>Profile Template ID</span>
+        <input type="text" name="simulation.load.profile_template_id" value="{{ project.simulation.load.profile_template_id or '' }}">
+      </label>
+      <label>
+        <span>Contracted Capacity (MW)</span>
+        <input type="number" step="any" name="simulation.load.contracted_capacity_mw" value="{{ '' if project.simulation.load.contracted_capacity_mw is none else project.simulation.load.contracted_capacity_mw }}">
+      </label>
+      <label>
+        <span>Output Profile (kW)</span>
+        <input type="number" step="any" name="simulation.load.output_profile_kw" value="{{ '' if project.simulation.load.output_profile_kw is none else project.simulation.load.output_profile_kw }}">
+      </label>
+      <label>
+        <span>Aux Consumption (kW)</span>
+        <input type="number" step="any" name="simulation.load.aux_consumption_kw" value="{{ project.simulation.load.aux_consumption_kw }}">
+      </label>
+    </div>
+  </section>
+
+  <section class="panel form-section">
+    <div class="panel-header"><h3>Battery</h3></div>
+    <div class="form-grid">
+      <label>
+        <span>Nominal Power (kW)</span>
+        <input type="number" step="any" name="simulation.battery.nominal_power_kw" value="{{ project.simulation.battery.nominal_power_kw }}">
+      </label>
+      <label>
+        <span>Duration (hours)</span>
+        <input type="number" step="any" name="simulation.battery.duration_hours" value="{{ project.simulation.battery.duration_hours }}">
+      </label>
+      <label>
+        <span>Charge Efficiency</span>
+        <input type="number" step="any" name="simulation.battery.charge_efficiency" value="{{ project.simulation.battery.charge_efficiency }}">
+      </label>
+      <label>
+        <span>Discharge Efficiency</span>
+        <input type="number" step="any" name="simulation.battery.discharge_efficiency" value="{{ project.simulation.battery.discharge_efficiency }}">
+      </label>
+      <label>
+        <span>Degradation per Cycle</span>
+        <input type="number" step="any" name="simulation.battery.degradation_per_cycle" value="{{ project.simulation.battery.degradation_per_cycle }}">
+      </label>
+      <label>
+        <span>Initial SOC Fraction</span>
+        <input type="number" step="any" name="simulation.battery.initial_soc_fraction" value="{{ project.simulation.battery.initial_soc_fraction }}">
+      </label>
+      <label>
+        <span>Min SOC Fraction</span>
+        <input type="number" step="any" name="simulation.battery.min_soc_fraction" value="{{ project.simulation.battery.min_soc_fraction }}">
+      </label>
+      <label>
+        <span>Max SOC Fraction</span>
+        <input type="number" step="any" name="simulation.battery.max_soc_fraction" value="{{ project.simulation.battery.max_soc_fraction }}">
+      </label>
+    </div>
+    <div class="form-grid form-grid-wide">
+      <label>
+        <span>Charge Loss Table (YAML)</span>
+        <textarea name="simulation.battery.charge_loss_table" rows="8">{% for key, value in project.simulation.battery.charge_loss_table.items() %}{{ key }}: {{ value }}
+{% endfor %}</textarea>
+      </label>
+      <label>
+        <span>Discharge Loss Table (YAML)</span>
+        <textarea name="simulation.battery.discharge_loss_table" rows="8">{% for key, value in project.simulation.battery.discharge_loss_table.items() %}{{ key }}: {{ value }}
+{% endfor %}</textarea>
+      </label>
+    </div>
+  </section>
+
+  <section class="panel form-section">
+    <div class="panel-header"><h3>Sensitivity</h3></div>
+    <div class="form-grid">
+      <label>
+        <span>Wind Multipliers</span>
+        <textarea name="sensitivity.wind_multipliers" rows="3">{{ project.sensitivity.wind_multipliers | join(', ') }}</textarea>
+      </label>
+      <label>
+        <span>Solar Multipliers</span>
+        <textarea name="sensitivity.solar_multipliers" rows="3">{{ project.sensitivity.solar_multipliers | join(', ') }}</textarea>
+      </label>
+      <label>
+        <span>Profile Multipliers</span>
+        <textarea name="sensitivity.profile_multipliers" rows="3">{{ project.sensitivity.profile_multipliers | join(', ') }}</textarea>
+      </label>
+      <label>
+        <span>Battery Capacity Values (kWh)</span>
+        <textarea name="sensitivity.battery_capacity_kwh_values" rows="3">{{ project.sensitivity.battery_capacity_kwh_values | join(', ') }}</textarea>
+      </label>
+      <label>
+        <span>Battery Duration Values (hours)</span>
+        <textarea name="sensitivity.battery_duration_hour_values" rows="3">{{ project.sensitivity.battery_duration_hour_values | join(', ') }}</textarea>
+      </label>
+    </div>
+  </section>
+
+  <div class="action-row">
+    <button class="button" type="submit">Save Configuration</button>
+  </div>
+</form>
+{% endblock %}

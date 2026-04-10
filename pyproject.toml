@@ -9,6 +9,7 @@ description = "SECI FDRE-V BESS model with tender-derived input generation and s
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+  "Flask>=3.0.0",
   "numpy>=2.0.0",
   "polars>=1.22.0",
   "PyYAML>=6.0.2",
@@ -22,6 +23,7 @@ dev = [
 
 [project.scripts]
 seci-fdre-v-model = "seci_fdre_v_model.cli:main"
+seci-fdre-v-web = "seci_fdre_v_model.web.app:main"
 
 [tool.setuptools]
 include-package-data = true

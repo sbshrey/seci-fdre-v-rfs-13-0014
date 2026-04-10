@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Inputs | SECI FDRE-V Control Room{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Managed Inputs</p>
+    <h2>Workspace Input Files</h2>
+    <p class="section-note">Upload or download the canonical workspace files used for future runs.</p>
+  </div>
+  <div class="action-row">
+    <form method="post" action="{{ url_for('generate_inputs') }}">
+      <button class="button button-ghost" type="submit">Generate Profiles</button>
+    </form>
+    <form method="post" action="{{ url_for('run_study_stream') }}" data-study-form>
+      <button class="button" type="submit">Run Study</button>
+    </form>
+  </div>
+</section>
+
+<section class="stack">
+  {% for item in managed_inputs %}
+    <article class="panel">
+      <div class="panel-header">
+        <div>
+          <h3>{{ item.label }}</h3>
+          <p class="section-note">{{ item.description }}</p>
+        </div>
+        <div class="status-pill {% if item.validation_ok %}status-completed{% else %}status-failed{% endif %}">
+          {{ item.validation_message }}
+        </div>
+      </div>
+      <div class="meta-grid">
+        <div><strong>Workspace Name</strong><span>{{ item.canonical_name }}</span></div>
+        <div><strong>Original Name</strong><span>{{ item.original_name or '—' }}</span></div>
+        <div><strong>Source</strong><span>{{ item.source or '—' }}</span></div>
+        <div><strong>Modified</strong><span>{{ item.modified_at or '—' }}</span></div>
+        <div><strong>Size</strong><span>{% if item.size_kb is not none %}{{ "%.1f"|format(item.size_kb) }} KB{% else %}—{% endif %}</span></div>
+        <div><strong>Expected Headers</strong><span>{{ item.expected_headers | join(', ') }}</span></div>
+      </div>
+      <div class="action-row">
+        <form method="post" action="{{ url_for('upload_input', input_key=item.key) }}" enctype="multipart/form-data" class="upload-form">
+          <input type="file" name="file" accept=".csv,text/csv">
+          <button class="button" type="submit">Upload</button>
+        </form>
+        {% if item.exists %}
+          <a class="button button-ghost" href="{{ url_for('download_input', input_key=item.key) }}">Download</a>
+        {% endif %}
+      </div>
+    </article>
+  {% endfor %}
+</section>
+{% endblock %}

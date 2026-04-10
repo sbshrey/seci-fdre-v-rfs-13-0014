@@ -1,0 +1,289 @@
+{% extends "base.html" %}
+{% block title %}Dashboard | SECI FDRE-V Control Room{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Run Control</p>
+    <h2>Study Dashboard</h2>
+    <p class="section-note">Manage the local workspace, run the study, and inspect immutable run packages.</p>
+  </div>
+  <div class="action-row">
+    <form method="post" action="{{ url_for('generate_inputs') }}">
+      <button class="button button-ghost" type="submit">Generate Profiles</button>
+    </form>
+    <form method="post" action="{{ url_for('run_study_stream') }}" data-study-form>
+      <button class="button" type="submit">Run Study</button>
+    </form>
+  </div>
+</section>
+
+<div class="dashboard-layout">
+  <aside class="sidebar panel">
+    <div class="panel-header">
+      <h3>Runs</h3>
+      <a href="{{ url_for('runs_page') }}" class="button-link">View all</a>
+    </div>
+    {% if run_records %}
+      <div class="run-list">
+        {% for run in run_records %}
+          <a class="run-link {% if selected_run and selected_run.run_id == run.run_id %}active{% endif %}" href="{{ url_for('run_dashboard', run_id=run.run_id) }}">
+            <strong>{{ run.run_id }}</strong>
+            <span>{{ run.status }}</span>
+            <span>{{ run.started_at }}</span>
+          </a>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-state">No runs yet. Generate inputs or run the study to create the first package.</p>
+    {% endif %}
+  </aside>
+
+  <section class="content-column">
+    {% if not selected_run %}
+      <article class="panel empty-panel">
+        <h3>No run selected</h3>
+        <p>The workspace is ready. Use the actions above to generate profile files or launch the first study run.</p>
+      </article>
+    {% else %}
+      <article class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Selected Run</p>
+            <h3>{{ selected_run.run_id }}</h3>
+          </div>
+          <div class="status-pill status-{{ selected_run.status }}">{{ selected_run.status }}</div>
+        </div>
+        {% if selected_run.error %}
+          <p class="flash flash-error">{{ selected_run.error }}</p>
+        {% endif %}
+        <div class="meta-grid">
+          <div><strong>Plant</strong><span>{{ selected_run.plant_name }}</span></div>
+          <div><strong>Started</strong><span>{{ selected_run.started_at }}</span></div>
+          <div><strong>Finished</strong><span>{{ selected_run.finished_at or 'Running' }}</span></div>
+          <div><strong>Package</strong><span>{{ selected_run.package_dir }}</span></div>
+        </div>
+      </article>
+
+      <section class="metric-grid">
+        {% for metric in metric_cards %}
+          <article class="metric-card">
+            <p class="metric-title">{{ metric.title }}</p>
+            <h3 class="metric-value">{{ metric.value }}</h3>
+            <p class="metric-subtitle">{{ metric.subtitle }}</p>
+          </article>
+        {% endfor %}
+      </section>
+
+      <div class="two-column-grid">
+        <article class="panel">
+          <div class="panel-header">
+            <h3>Energy Table</h3>
+            <span class="panel-note">Annual SOURCES / USES / LOSS</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th>Element</th>
+                  <th class="number">Value (kW-min)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in energy_table %}
+                  <tr>
+                    <td>{{ row.category }}</td>
+                    <td>{{ row.element }}</td>
+                    <td class="number">{{ "{:,.0f}".format(row.value_kw_min) }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-header">
+            <h3>Monthly Compliance</h3>
+            <span class="panel-note">First 12 rows</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  {% if compliance_rows %}
+                    {% for key in compliance_rows[0].keys() %}
+                      <th>{{ key }}</th>
+                    {% endfor %}
+                  {% endif %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in compliance_rows %}
+                  <tr>
+                    {% for value in row.values() %}
+                      <td>{{ value }}</td>
+                    {% endfor %}
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </article>
+      </div>
+
+      <article class="panel">
+        <div class="panel-header panel-header-stack">
+          <div>
+            <h3>Charts</h3>
+            <p class="section-note">Switch between curated chart datasets without reloading the page.</p>
+          </div>
+          <div class="tab-row">
+            {% for option in chart_options %}
+              <button
+                type="button"
+                class="tab-button {% if option.relative_path == selected_chart_dataset %}active{% endif %}"
+                data-chart-dataset="{{ option.relative_path }}"
+                data-run-id="{{ selected_run.run_id }}">
+                {{ dataset_label(option.relative_path) }}
+              </button>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="chart-grid" data-chart-grid>
+          {% for chart in chart_cards %}
+            <article class="chart-card">
+              <div class="panel-header panel-header-stack">
+                <div>
+                  <h4>{{ chart.title }}</h4>
+                  <p class="section-note">{{ chart.subtitle }}</p>
+                </div>
+              </div>
+              <div class="chart-wrap">{{ chart.svg|safe }}</div>
+            </article>
+          {% endfor %}
+        </div>
+      </article>
+
+      <div class="two-column-grid">
+        <article class="panel">
+          <div class="panel-header">
+            <h3>Cases Table</h3>
+            <span class="panel-note">Preview</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  {% if case_rows %}
+                    {% for key in case_rows[0].keys() %}
+                      <th>{{ key }}</th>
+                    {% endfor %}
+                  {% endif %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in case_rows %}
+                  <tr>
+                    {% for value in row.values() %}
+                      <td>{{ value }}</td>
+                    {% endfor %}
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-header">
+            <h3>Sensitivity Cross</h3>
+            <span class="panel-note">Preview</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  {% if cross_rows %}
+                    {% for key in cross_rows[0].keys() %}
+                      <th>{{ key }}</th>
+                    {% endfor %}
+                  {% endif %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in cross_rows %}
+                  <tr>
+                    {% for value in row.values() %}
+                      <td>{{ value }}</td>
+                    {% endfor %}
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </article>
+      </div>
+
+      <article class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Artifacts</h3>
+            <p class="section-note">Select an artifact to preview or download.</p>
+          </div>
+        </div>
+        <div class="artifact-layout">
+          <aside class="artifact-list">
+            {% for artifact in selected_run.artifacts %}
+              <a class="artifact-link {% if preview_artifact == artifact.relative_path %}active{% endif %}" href="{{ url_for('run_dashboard', run_id=selected_run.run_id, artifact=artifact.relative_path, chart_dataset=selected_chart_dataset) }}">
+                <strong>{{ artifact.relative_path }}</strong>
+                <span>{{ "%.1f"|format(artifact.size_kb) }} KB</span>
+              </a>
+              <a class="button-link small-link" href="{{ url_for('download_artifact', run_id=selected_run.run_id, relative_path=artifact.relative_path) }}">Download</a>
+            {% endfor %}
+          </aside>
+
+          <div class="artifact-preview">
+            {% if preview %}
+              <div class="panel-header">
+                <h4>{{ artifact_label(preview_artifact) }}</h4>
+                <span class="panel-note">Page {{ preview.page }} of {{ preview.total_pages }}</span>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      {% for column in preview.columns %}
+                        <th>{{ column }}</th>
+                      {% endfor %}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for row in preview.rows %}
+                      <tr>
+                        {% for value in row.values() %}
+                          <td>{{ value }}</td>
+                        {% endfor %}
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+              <div class="pager">
+                {% if preview.page > 1 %}
+                  <a class="button-link" href="{{ url_for('run_dashboard', run_id=selected_run.run_id, artifact=preview_artifact, chart_dataset=selected_chart_dataset, page=preview.page - 1, page_size=preview.page_size) }}">Previous</a>
+                {% endif %}
+                {% if preview.page < preview.total_pages %}
+                  <a class="button-link" href="{{ url_for('run_dashboard', run_id=selected_run.run_id, artifact=preview_artifact, chart_dataset=selected_chart_dataset, page=preview.page + 1, page_size=preview.page_size) }}">Next</a>
+                {% endif %}
+              </div>
+            {% else %}
+              <p class="empty-state">No artifact selected.</p>
+            {% endif %}
+          </div>
+        </div>
+      </article>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

@@ -146,6 +146,7 @@ venv.bak/
 
 # Local generated study outputs
 output/
+.workspace/
 
 # Spyder project settings
 .spyderproject
