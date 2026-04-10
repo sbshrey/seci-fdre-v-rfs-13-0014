@@ -43,6 +43,8 @@ Or with Docker Compose:
 docker compose up --build
 ```
 
+Windows desktop packaging is also supported for non-technical users. The packaged build launches the same localhost web UI, opens it in the default browser, and stays available through a tray icon until the user quits.
+
 The app uses `SECI_FDRE_V_WORKSPACE` when set. By default it creates a local `.workspace/` directory with:
 
 - `config/project.yaml`
@@ -82,3 +84,23 @@ Each run writes to `output/<plant_name>/`:
 - `<plant_name>.zip`
 
 The control-room workflow writes immutable run packages to `.workspace/runs/<run_id>/package/` instead of overwriting prior runs.
+
+## Windows Portable Build
+
+Build the Windows distribution on a Windows machine:
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+.\release\windows\build-portable.ps1
+```
+
+That script installs the desktop-build dependencies, runs the web and desktop tests, builds a PyInstaller one-folder app, and creates `dist/SECI-FDRE-V-windows-portable.zip`.
+
+For the end user:
+
+1. unzip `SECI-FDRE-V-windows-portable.zip`
+2. open the `SECI-FDRE-V` folder
+3. double-click `SECI-FDRE-V.exe`
+4. use the browser UI that opens automatically
+5. quit from the system tray icon when finished

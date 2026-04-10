@@ -69,6 +69,10 @@ def test_web_control_room_flow(tmp_path: Path) -> None:
     app = create_app(workspace_root=workspace_root, source_config_path=source_config)
     client = app.test_client()
 
+    health_response = client.get("/api/health")
+    assert health_response.status_code == 200
+    assert health_response.get_json() == {"status": "ok"}
+
     response = client.get("/inputs")
     assert response.status_code == 200
     assert b"Workspace Input Files" in response.data

@@ -22,6 +22,7 @@ import polars as pl
 import yaml
 
 from seci_fdre_v_model.config import ProjectConfig
+from seci_fdre_v_model.runtime import repo_root, resolve_seed_source_config_path
 from seci_fdre_v_model.data.loaders import (
     AUX_POWER_COLUMN,
     PROFILE_POWER_COLUMN,
@@ -990,7 +991,8 @@ def _resolve_source_config_path(path: str | Path | None) -> Path:
 
     candidates = [
         Path.cwd() / "config" / "project.yaml",
-        _repo_root() / "config" / "project.yaml",
+        resolve_seed_source_config_path(),
+        repo_root() / "config" / "project.yaml",
     ]
     for candidate in candidates:
         resolved = candidate.expanduser().resolve()
@@ -1000,7 +1002,7 @@ def _resolve_source_config_path(path: str | Path | None) -> Path:
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return repo_root()
 
 
 def _load_yaml_mapping(path: Path) -> dict[str, Any]:

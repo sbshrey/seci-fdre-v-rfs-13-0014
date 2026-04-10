@@ -283,6 +283,7 @@ def create_app(
         }
 
     @app.get("/health")
+    @app.get("/api/health")
     def health() -> Response:
         return jsonify({"status": "ok"})
 

@@ -13,6 +13,7 @@ dependencies = [
   "numpy>=2.0.0",
   "polars>=1.22.0",
   "PyYAML>=6.0.2",
+  "waitress>=3.0.0",
   "xlsxwriter>=3.2.0",
 ]
 
@@ -20,9 +21,15 @@ dependencies = [
 dev = [
   "pytest>=8.3.0",
 ]
+windows = [
+  "Pillow>=10.0.0",
+  "pyinstaller>=6.0.0",
+  "pystray>=0.19.5",
+]
 
 [project.scripts]
 seci-fdre-v-model = "seci_fdre_v_model.cli:main"
+seci-fdre-v-desktop = "seci_fdre_v_model.desktop:main"
 seci-fdre-v-web = "seci_fdre_v_model.web.app:main"
 
 [tool.setuptools]
