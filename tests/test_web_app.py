@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import time
 from pathlib import Path
 
 from seci_fdre_v_model.web.app import create_app
@@ -104,18 +105,20 @@ def test_web_control_room_flow(tmp_path: Path) -> None:
     assert (workspace_root / "inputs" / "output_profile.csv").exists()
     assert (workspace_root / "inputs" / "aux_power.csv").exists()
 
-    stream_response = client.post("/runs/study", buffered=False)
-    assert stream_response.status_code == 200
-    payloads = []
-    for chunk in stream_response.response:
-        if not chunk:
-            continue
-        for line in chunk.decode("utf-8").splitlines():
-            if line.strip():
-                payloads.append(json.loads(line))
-    done = next(item for item in payloads if item.get("done"))
-    redirect = done["redirect"]
-    run_id = redirect.rstrip("/").split("/")[-1]
+    start_response = client.post("/runs/study", data={"next": "/runs"}, follow_redirects=True)
+    assert start_response.status_code == 200
+    assert b"Study started in background" in start_response.data
+
+    run_id = None
+    for _ in range(80):
+        job_payload = client.get("/api/job-status").get_json()
+        job = job_payload["job"]
+        if job:
+            run_id = job["run_id"]
+            if not job["is_active"]:
+                break
+        time.sleep(0.1)
+    assert run_id is not None
 
     run_dir = workspace_root / "runs" / run_id
     assert (run_dir / "config" / "project.yaml").exists()
@@ -139,6 +142,55 @@ def test_web_control_room_flow(tmp_path: Path) -> None:
     artifact_response = client.get(f"/runs/{run_id}/artifacts/base_summary.csv")
     assert artifact_response.status_code == 200
     assert b"plant_name" in artifact_response.data
+
+
+def test_single_background_job_cancel_and_delete(tmp_path: Path, monkeypatch) -> None:
+    source_config = _write_project_config(tmp_path)
+    workspace_root = tmp_path / ".workspace"
+    app = create_app(workspace_root=workspace_root, source_config_path=source_config)
+    client = app.test_client()
+
+    def fake_execute_run_snapshot(*args, progress_callback=None, **kwargs):
+        for index in range(100):
+            if progress_callback is not None:
+                progress_callback("Simulating", float(index), f"tick {index}")
+            time.sleep(0.02)
+        raise AssertionError("expected cancellation before fake run completed")
+
+    monkeypatch.setattr("seci_fdre_v_model.web.app.execute_run_snapshot", fake_execute_run_snapshot)
+
+    start_response = client.post("/runs/study", data={"next": "/runs"}, follow_redirects=True)
+    assert start_response.status_code == 200
+    assert b"Study started in background" in start_response.data
+
+    running_payload = client.get("/api/job-status").get_json()
+    assert running_payload["job"] is not None
+    assert running_payload["job"]["is_active"] is True
+    run_id = running_payload["job"]["run_id"]
+
+    second_start = client.post("/runs/study", data={"next": "/runs"}, follow_redirects=True)
+    assert second_start.status_code == 200
+    assert b"A study is already running" in second_start.data
+
+    cancel_response = client.post("/jobs/current/cancel", data={"next": "/runs"}, follow_redirects=True)
+    assert cancel_response.status_code == 200
+    assert b"Cancellation requested" in cancel_response.data
+
+    cancelled_payload = None
+    for _ in range(80):
+        cancelled_payload = client.get("/api/job-status").get_json()
+        if cancelled_payload["job"] and not cancelled_payload["job"]["is_active"]:
+            break
+        time.sleep(0.05)
+
+    assert cancelled_payload is not None
+    assert cancelled_payload["job"]["status"] == "cancelled"
+    assert (workspace_root / "runs" / run_id).exists()
+
+    delete_response = client.post(f"/runs/{run_id}/delete", data={"next": "/runs"}, follow_redirects=True)
+    assert delete_response.status_code == 200
+    assert b"Deleted run" in delete_response.data
+    assert not (workspace_root / "runs" / run_id).exists()
 
 
 def test_profile_mode_fields_toggle_and_save(tmp_path: Path) -> None:

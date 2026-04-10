@@ -31,64 +31,74 @@ function renderChartCards(cards) {
     .join("");
 }
 
-async function handleStudySubmit(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const shell = document.querySelector("[data-progress-shell]");
+function updateStartButtons(isActive) {
+  document.querySelectorAll("[data-start-study-button]").forEach((button) => {
+    button.disabled = isActive;
+    button.textContent = isActive ? "Study Running" : "Run Study";
+  });
+}
+
+function updateJobShell(job) {
+  const shell = document.querySelector("[data-job-shell]");
   const stageNode = document.querySelector("[data-progress-stage]");
   const pctNode = document.querySelector("[data-progress-pct]");
   const fillNode = document.querySelector("[data-progress-fill]");
   const detailNode = document.querySelector("[data-progress-detail]");
-  if (!shell || !stageNode || !pctNode || !fillNode || !detailNode) return;
+  const runNode = document.querySelector("[data-progress-run-id]");
+  const statusNode = document.querySelector("[data-progress-status]");
+  const openLink = document.querySelector("[data-progress-open]");
+  const cancelForm = document.querySelector("[data-job-cancel-form]");
+  const deleteForm = document.querySelector("[data-job-delete-form]");
+  if (!shell || !stageNode || !pctNode || !fillNode || !detailNode || !runNode || !statusNode) return;
 
-  shell.hidden = false;
-  stageNode.textContent = "Preparing run…";
-  pctNode.textContent = "0%";
-  fillNode.style.width = "0%";
-  detailNode.textContent = "Starting background execution.";
-
-  const response = await fetch(form.action, { method: "POST" });
-  if (!response.ok || !response.body) {
-    detailNode.textContent = "Failed to start the study.";
+  if (!job) {
+    shell.hidden = true;
+    updateStartButtons(false);
     return;
   }
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
+  const pct = Math.max(0, Math.min(100, Number(job.pct || 0)));
+  shell.hidden = false;
+  stageNode.textContent = job.stage || "Study";
+  pctNode.textContent = `${pct.toFixed(0)}%`;
+  fillNode.style.width = `${pct}%`;
+  detailNode.textContent = job.detail || "";
+  runNode.textContent = job.run_id || "No active run";
+  statusNode.textContent = job.status || "unknown";
+  statusNode.className = `status-pill status-${job.status || "failed"}`;
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      const payload = JSON.parse(line);
-      if (payload.error) {
-        stageNode.textContent = "Run failed";
-        detailNode.textContent = payload.error;
-        fillNode.style.width = "100%";
-        pctNode.textContent = "Failed";
-        return;
-      }
-      if (payload.done && payload.redirect) {
-        stageNode.textContent = "Completed";
-        detailNode.textContent = "Opening finished run.";
-        fillNode.style.width = "100%";
-        pctNode.textContent = "100%";
-        window.location.assign(payload.redirect);
-        return;
-      }
-      if (payload.stage) {
-        stageNode.textContent = payload.stage;
-        detailNode.textContent = payload.detail || "";
-        const pct = Math.max(0, Math.min(100, Number(payload.pct || 0)));
-        pctNode.textContent = `${pct.toFixed(0)}%`;
-        fillNode.style.width = `${pct}%`;
-      }
+  if (openLink) {
+    openLink.hidden = !job.run_url;
+    if (job.run_url) {
+      openLink.href = job.run_url;
     }
+  }
+  if (cancelForm) {
+    cancelForm.hidden = !job.is_active;
+  }
+  if (deleteForm) {
+    deleteForm.hidden = job.is_active || !job.delete_url;
+    if (job.delete_url) {
+      deleteForm.action = job.delete_url;
+    }
+  }
+
+  updateStartButtons(Boolean(job.is_active));
+}
+
+async function pollJobStatus() {
+  const shell = document.querySelector("[data-job-shell]");
+  if (!shell) return;
+  try {
+    const response = await fetch("/api/job-status", {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!response.ok) return;
+    const payload = await response.json();
+    updateJobShell(payload.job);
+  } catch (_error) {
+    // Keep the last rendered state if polling fails.
   }
 }
 
@@ -141,12 +151,10 @@ function setupProfileModeControls() {
   });
 }
 
-document.querySelectorAll("[data-study-form]").forEach((form) => {
-  form.addEventListener("submit", handleStudySubmit);
-});
-
 document.querySelectorAll("[data-chart-dataset]").forEach((button) => {
   button.addEventListener("click", handleChartDatasetClick);
 });
 
 setupProfileModeControls();
+pollJobStatus();
+window.setInterval(pollJobStatus, 2500);

@@ -46,6 +46,10 @@ from seci_fdre_v_model.web.models import (
 ProgressCallback = Callable[[str, float, str], None]
 
 
+class StudyCancelledError(RuntimeError):
+    """Raised when a background study is cancelled by the user."""
+
+
 @dataclass(frozen=True)
 class ManagedInputSpec:
     key: str
@@ -404,6 +408,28 @@ def run_study(
 ) -> RunRecord:
     """Execute the full study in a fresh run directory and persist run metadata."""
     run_id, run_dir, config_path, package_dir = create_run_snapshot(state)
+    return execute_run_snapshot(
+        state,
+        run_id=run_id,
+        run_dir=run_dir,
+        config_path=config_path,
+        package_dir=package_dir,
+        progress_callback=progress_callback,
+        dump_sections=dump_sections,
+    )
+
+
+def execute_run_snapshot(
+    state: WorkspaceState,
+    *,
+    run_id: str,
+    run_dir: Path,
+    config_path: Path,
+    package_dir: Path,
+    progress_callback: ProgressCallback | None = None,
+    dump_sections: bool = False,
+) -> RunRecord:
+    """Execute a previously created immutable run snapshot."""
     run_json_path = run_dir / "run.json"
     try:
         project = ProjectConfig.from_yaml(config_path)
@@ -414,26 +440,34 @@ def run_study(
             progress_callback=progress_callback,
         )
         summary_metrics = _load_summary_metrics(result.package_dir)
-        metadata = _load_run_json(run_json_path)
-        metadata.update(
-            {
-                "status": "completed",
-                "finished_at": _iso_now(),
-                "summary_metrics": summary_metrics,
-                "artifacts": _serialize_artifacts(_build_artifact_index(result.package_dir)),
-            }
+        update_run_status(
+            state,
+            run_id,
+            status="completed",
+            finished_at=_iso_now(),
+            summary_metrics=summary_metrics,
+            artifacts=_serialize_artifacts(_build_artifact_index(result.package_dir)),
+            error=None,
         )
-        _write_run_json(run_json_path, metadata)
+    except StudyCancelledError as exc:
+        update_run_status(
+            state,
+            run_id,
+            status="cancelled",
+            finished_at=_iso_now(),
+            error=str(exc),
+            artifacts=_serialize_artifacts(_build_artifact_index(package_dir)),
+        )
+        raise
     except Exception as exc:
-        metadata = _load_run_json(run_json_path)
-        metadata.update(
-            {
-                "status": "failed",
-                "finished_at": _iso_now(),
-                "error": str(exc),
-            }
+        update_run_status(
+            state,
+            run_id,
+            status="failed",
+            finished_at=_iso_now(),
+            error=str(exc),
+            artifacts=_serialize_artifacts(_build_artifact_index(package_dir)),
         )
-        _write_run_json(run_json_path, metadata)
         raise
     return get_run_record(state, run_id)
 
@@ -459,6 +493,37 @@ def get_run_record(state: WorkspaceState, run_id: str) -> RunRecord:
 def get_latest_run_record(state: WorkspaceState) -> RunRecord | None:
     runs = list_run_records(state)
     return runs[0] if runs else None
+
+
+def update_run_status(
+    state: WorkspaceState,
+    run_id: str,
+    *,
+    status: str,
+    finished_at: str | None = None,
+    error: str | None = None,
+    summary_metrics: dict[str, Any] | None = None,
+    artifacts: list[dict[str, Any]] | None = None,
+) -> RunRecord:
+    run_json_path = state.runs_dir / run_id / "run.json"
+    metadata = _load_run_json(run_json_path)
+    metadata["status"] = status
+    metadata["finished_at"] = finished_at
+    metadata["error"] = error
+    if summary_metrics is not None:
+        metadata["summary_metrics"] = summary_metrics
+    if artifacts is not None:
+        metadata["artifacts"] = artifacts
+    _write_run_json(run_json_path, metadata)
+    return _run_record_from_json(run_json_path)
+
+
+def delete_run_record(state: WorkspaceState, run_id: str) -> None:
+    run_dir = state.runs_dir / run_id
+    run_json_path = run_dir / "run.json"
+    if not run_json_path.exists():
+        raise FileNotFoundError(f"Run not found: {run_id}")
+    shutil.rmtree(run_dir)
 
 
 def resolve_run_artifact(record: RunRecord, relative_path: str) -> Path:

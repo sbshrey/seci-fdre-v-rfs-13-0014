@@ -88,3 +88,21 @@ class TablePreview:
     page_size: int
     total_rows: int
     total_pages: int
+
+
+@dataclass(frozen=True)
+class BackgroundJob:
+    run_id: str | None
+    status: str
+    stage: str
+    pct: float
+    detail: str
+    started_at: str | None
+    updated_at: str | None
+    finished_at: str | None
+    error: str | None = None
+    cancel_requested: bool = False
+
+    @property
+    def is_active(self) -> bool:
+        return self.status in {"queued", "running", "cancelling"}

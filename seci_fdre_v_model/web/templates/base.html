@@ -21,16 +21,33 @@
       </nav>
     </header>
 
-    <section class="progress-shell" data-progress-shell hidden>
+    <section class="progress-shell" data-job-shell {% if not current_job %}hidden{% endif %}>
       <div class="progress-card">
         <div class="progress-head">
-          <strong data-progress-stage>Preparing run…</strong>
-          <span data-progress-pct>0%</span>
+          <strong data-progress-stage>{% if current_job %}{{ current_job.stage }}{% else %}Preparing run…{% endif %}</strong>
+          <span data-progress-pct>{% if current_job %}{{ "%.0f"|format(current_job.pct) }}%{% else %}0%{% endif %}</span>
         </div>
+        <p class="progress-job-line">
+          <strong data-progress-run-id>{% if current_job and current_job.run_id %}{{ current_job.run_id }}{% else %}No active run{% endif %}</strong>
+          <span class="status-pill status-{% if current_job %}{{ current_job.status }}{% else %}completed{% endif %}" data-progress-status>
+            {% if current_job %}{{ current_job.status }}{% else %}idle{% endif %}
+          </span>
+        </p>
         <div class="progress-bar">
-          <div class="progress-fill" data-progress-fill></div>
+          <div class="progress-fill" data-progress-fill style="width: {% if current_job %}{{ current_job.pct }}{% else %}0{% endif %}%"></div>
         </div>
-        <p data-progress-detail>Waiting to start.</p>
+        <p data-progress-detail>{% if current_job %}{{ current_job.detail }}{% else %}Waiting to start.{% endif %}</p>
+        <div class="action-row action-row-tight">
+          <a class="button-link" data-progress-open {% if not current_job or not current_job.run_id %}hidden{% endif %} href="{% if current_job and current_job.run_id %}{{ url_for('run_dashboard', run_id=current_job.run_id) }}{% else %}#{% endif %}">Open run</a>
+          <form method="post" action="{{ url_for('cancel_current_job') }}" data-job-cancel-form {% if not current_job or not current_job.is_active %}hidden{% endif %}>
+            <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
+            <button class="button button-danger" type="submit">Stop job</button>
+          </form>
+          <form method="post" data-job-delete-form {% if not current_job or current_job.is_active or not current_job.run_id %}hidden{% endif %} action="{% if current_job and current_job.run_id %}{{ url_for('delete_run', run_id=current_job.run_id) }}{% endif %}">
+            <input type="hidden" name="next" value="{{ url_for('runs_page') }}">
+            <button class="button button-danger button-subtle" type="submit">Delete run</button>
+          </form>
+        </div>
       </div>
     </section>
 

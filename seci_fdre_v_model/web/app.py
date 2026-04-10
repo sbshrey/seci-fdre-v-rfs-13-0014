@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import argparse
-import json
 import threading
+from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
-from queue import Empty, Queue
 from typing import Any, Sequence
 
 from flask import (
@@ -18,18 +18,22 @@ from flask import (
     render_template,
     request,
     send_file,
-    stream_with_context,
     url_for,
 )
 
 from seci_fdre_v_model.profile_templates import SUPPORTED_TENDER_PROFILES
+from seci_fdre_v_model.web.models import BackgroundJob
 from seci_fdre_v_model.web.services import (
+    StudyCancelledError,
     artifact_label,
     build_dataset_chart_cards,
     chart_dataset_options,
+    create_run_snapshot,
     dataset_label,
+    delete_run_record,
     default_preview_artifact,
     ensure_workspace_ready,
+    execute_run_snapshot,
     generate_active_inputs,
     get_latest_run_record,
     get_run_record,
@@ -41,9 +45,9 @@ from seci_fdre_v_model.web.services import (
     load_small_table,
     load_table_preview,
     resolve_run_artifact,
-    run_study,
     save_project_form,
     store_uploaded_input,
+    update_run_status,
 )
 
 CONFIG_SELECT_OPTIONS = {
@@ -67,6 +71,168 @@ CONFIG_SELECT_OPTIONS = {
 }
 
 
+class StudyJobManager:
+    def __init__(self, workspace_factory: Any) -> None:
+        self._workspace_factory = workspace_factory
+        self._lock = threading.Lock()
+        self._job: BackgroundJob | None = None
+        self._thread: threading.Thread | None = None
+        self._cancel_event: threading.Event | None = None
+
+    def current_job(self) -> BackgroundJob | None:
+        with self._lock:
+            return self._job
+
+    def start(self, *, dump_sections: bool = False) -> BackgroundJob:
+        with self._lock:
+            if self._job is not None and self._job.is_active:
+                raise RuntimeError("A study is already running. Stop it before starting another job.")
+            state = self._workspace_factory()
+            run_id, run_dir, config_path, package_dir = create_run_snapshot(state)
+            job = BackgroundJob(
+                run_id=run_id,
+                status="queued",
+                stage="Queued",
+                pct=0.0,
+                detail="Study queued in the background.",
+                started_at=_iso_now(),
+                updated_at=_iso_now(),
+                finished_at=None,
+                error=None,
+                cancel_requested=False,
+            )
+            cancel_event = threading.Event()
+            self._job = job
+            self._cancel_event = cancel_event
+
+        def emit(stage: str, pct: float, detail: str) -> None:
+            if cancel_event.is_set():
+                raise StudyCancelledError("Cancelled by user.")
+            self._update_job(status="running", stage=stage, pct=pct, detail=detail, error=None)
+
+        def worker() -> None:
+            try:
+                if cancel_event.is_set():
+                    raise StudyCancelledError("Cancelled by user.")
+                self._update_job(status="running", stage="Starting", pct=1.0, detail="Preparing the study package.")
+                record = execute_run_snapshot(
+                    state,
+                    run_id=run_id,
+                    run_dir=run_dir,
+                    config_path=config_path,
+                    package_dir=package_dir,
+                    progress_callback=emit,
+                    dump_sections=dump_sections,
+                )
+                self._update_job(
+                    status=record.status,
+                    stage="Completed",
+                    pct=100.0,
+                    detail=f"Run {record.run_id} completed.",
+                    finished_at=record.finished_at or _iso_now(),
+                    error=record.error,
+                )
+            except StudyCancelledError as exc:
+                try:
+                    update_run_status(
+                        state,
+                        run_id,
+                        status="cancelled",
+                        finished_at=_iso_now(),
+                        error=str(exc),
+                    )
+                except Exception:
+                    pass
+                self._update_job(
+                    status="cancelled",
+                    stage="Cancelled",
+                    pct=self.current_job().pct if self.current_job() else 0.0,
+                    detail="Run cancelled by user.",
+                    finished_at=_iso_now(),
+                    error=str(exc),
+                )
+            except Exception as exc:
+                try:
+                    record = get_run_record(state, run_id)
+                    finished_at = record.finished_at or _iso_now()
+                    error = record.error or str(exc)
+                except Exception:
+                    finished_at = _iso_now()
+                    error = str(exc)
+                self._update_job(
+                    status="failed",
+                    stage="Failed",
+                    pct=self.current_job().pct if self.current_job() else 0.0,
+                    detail=error,
+                    finished_at=finished_at,
+                    error=error,
+                )
+            finally:
+                with self._lock:
+                    self._thread = None
+                    self._cancel_event = None
+
+        thread = threading.Thread(target=worker, daemon=True)
+        with self._lock:
+            self._thread = thread
+        thread.start()
+        return job
+
+    def request_cancel(self) -> BackgroundJob:
+        with self._lock:
+            if self._job is None or not self._job.is_active:
+                raise RuntimeError("No study is currently running.")
+            if self._cancel_event is not None:
+                self._cancel_event.set()
+            self._job = replace(
+                self._job,
+                status="cancelling",
+                stage="Cancelling",
+                detail="Cancellation requested. Waiting for the current step to stop.",
+                cancel_requested=True,
+                updated_at=_iso_now(),
+            )
+            return self._job
+
+    def delete(self, run_id: str) -> None:
+        with self._lock:
+            if self._job is not None and self._job.run_id == run_id and self._job.is_active:
+                raise RuntimeError("Stop the running job before deleting it.")
+        state = self._workspace_factory()
+        delete_run_record(state, run_id)
+        with self._lock:
+            if self._job is not None and self._job.run_id == run_id:
+                self._job = None
+
+    def _update_job(
+        self,
+        *,
+        status: str | None = None,
+        stage: str | None = None,
+        pct: float | None = None,
+        detail: str | None = None,
+        finished_at: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        with self._lock:
+            if self._job is None:
+                return
+            self._job = replace(
+                self._job,
+                status=status or self._job.status,
+                stage=stage or self._job.stage,
+                pct=float(self._job.pct if pct is None else pct),
+                detail=detail or self._job.detail,
+                finished_at=finished_at if finished_at is not None else self._job.finished_at,
+                error=error if error is not None else self._job.error,
+                updated_at=_iso_now(),
+            )
+
+
+def _iso_now() -> str:
+    return datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat()
+
+
 def create_app(
     workspace_root: str | Path | None = None,
     *,
@@ -83,11 +249,14 @@ def create_app(
             source_config_path=app.config.get("SOURCE_CONFIG_PATH"),
         )
 
+    job_manager = StudyJobManager(workspace)
+
     @app.context_processor
     def inject_nav_context() -> dict[str, Any]:
         state = workspace()
         return {
             "workspace_root": str(state.root),
+            "current_job": job_manager.current_job(),
         }
 
     @app.get("/health")
@@ -163,52 +332,60 @@ def create_app(
         return redirect(request.referrer or url_for("inputs_page"))
 
     @app.post("/runs/study")
-    def run_study_stream() -> Response:
-        state = workspace()
+    def start_study_job() -> Response:
+        try:
+            job = job_manager.start(dump_sections=False)
+            flash(f"Study started in background. Run ID: {job.run_id}", "success")
+        except Exception as exc:
+            flash(str(exc), "error")
+        return _redirect_back()
 
-        def generate():
-            queue: Queue[tuple[str, Any, Any, Any]] = Queue()
+    @app.post("/jobs/current/cancel")
+    def cancel_current_job() -> Response:
+        try:
+            job = job_manager.request_cancel()
+            flash(f"Cancellation requested for run {job.run_id}.", "success")
+        except Exception as exc:
+            flash(str(exc), "error")
+        return _redirect_back()
 
-            def worker() -> None:
-                try:
-                    def emit(stage: str, pct: float, detail: str) -> None:
-                        queue.put(("progress", stage, pct, detail))
+    @app.post("/runs/<run_id>/delete")
+    def delete_run(run_id: str) -> Response:
+        try:
+            job_manager.delete(run_id)
+            flash(f"Deleted run {run_id}.", "success")
+        except Exception as exc:
+            flash(str(exc), "error")
+        next_target = request.form.get("next")
+        if next_target:
+            return redirect(next_target)
+        return redirect(url_for("runs_page"))
 
-                    record = run_study(state, progress_callback=emit, dump_sections=False)
-                    queue.put(("done", record.run_id, None, None))
-                except Exception as exc:
-                    queue.put(("error", str(exc), None, None))
-
-            thread = threading.Thread(target=worker, daemon=True)
-            thread.start()
-
-            while True:
-                try:
-                    item = queue.get(timeout=0.25)
-                except Empty:
-                    yield ""
-                    continue
-                kind = item[0]
-                if kind == "progress":
-                    _, stage, pct, detail = item
-                    yield json.dumps({"stage": stage, "pct": pct, "detail": detail}) + "\n"
-                elif kind == "done":
-                    _, run_id, _, _ = item
-                    yield json.dumps(
-                        {
-                            "done": True,
-                            "redirect": url_for("run_dashboard", run_id=run_id),
-                        }
-                    ) + "\n"
-                    break
-                else:
-                    _, error, _, _ = item
-                    yield json.dumps({"error": error}) + "\n"
-                    break
-
-            thread.join()
-
-        return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
+    @app.get("/api/job-status")
+    def api_job_status() -> Response:
+        job = job_manager.current_job()
+        if job is None:
+            return jsonify({"job": None, "can_start": True})
+        return jsonify(
+            {
+                "job": {
+                    "run_id": job.run_id,
+                    "status": job.status,
+                    "stage": job.stage,
+                    "pct": job.pct,
+                    "detail": job.detail,
+                    "started_at": job.started_at,
+                    "updated_at": job.updated_at,
+                    "finished_at": job.finished_at,
+                    "error": job.error,
+                    "cancel_requested": job.cancel_requested,
+                    "is_active": job.is_active,
+                    "run_url": url_for("run_dashboard", run_id=job.run_id) if job.run_id else None,
+                    "delete_url": url_for("delete_run", run_id=job.run_id) if job.run_id else None,
+                },
+                "can_start": not job.is_active,
+            }
+        )
 
     @app.get("/runs")
     def runs_page() -> str:
@@ -244,7 +421,7 @@ def create_app(
     def api_charts(run_id: str, dataset: str) -> Response:
         state = workspace()
         record = get_run_record(state, run_id)
-        cards = build_dataset_chart_cards(record, dataset)
+        cards = _safe_call(lambda: build_dataset_chart_cards(record, dataset), default=[])
         return jsonify(
             [
                 {"title": card.title, "subtitle": card.subtitle, "svg": card.svg}
@@ -267,14 +444,15 @@ def create_app(
                 compliance_rows=[],
                 case_rows=[],
                 cross_rows=[],
-                chart_cards=[],
-                chart_options=[],
-                selected_chart_dataset=None,
-                preview=None,
-                preview_artifact=None,
-                artifact_label=artifact_label,
-                dataset_label=dataset_label,
-            )
+            chart_cards=[],
+            chart_options=[],
+            selected_chart_dataset=None,
+            preview=None,
+            preview_artifact=None,
+            can_start_study=job_manager.current_job() is None or not job_manager.current_job().is_active,
+            artifact_label=artifact_label,
+            dataset_label=dataset_label,
+        )
 
         preview_artifact = request.args.get("artifact") or default_preview_artifact(record)
         selected_chart_dataset = request.args.get("chart_dataset")
@@ -283,36 +461,55 @@ def create_app(
             selected_chart_dataset = chart_options[0].relative_path
         page = int(request.args.get("page", "1"))
         page_size = int(request.args.get("page_size", "25"))
-        preview = (
-            load_table_preview(record, preview_artifact, page=page, page_size=page_size)
-            if preview_artifact
-            else None
-        )
-        chart_cards = (
-            build_dataset_chart_cards(record, selected_chart_dataset)
-            if selected_chart_dataset
-            else []
-        )
+        preview = _safe_call(
+            lambda: load_table_preview(record, preview_artifact, page=page, page_size=page_size),
+            default=None,
+        ) if preview_artifact else None
+        chart_cards = _safe_call(
+            lambda: build_dataset_chart_cards(record, selected_chart_dataset),
+            default=[],
+        ) if selected_chart_dataset else []
         return render_template(
             "dashboard.html",
             active_page="dashboard",
             run_records=run_records,
             selected_run=record,
-            metric_cards=load_metric_cards(record),
-            energy_table=load_energy_table(record),
-            compliance_rows=load_small_table(record, "base_case_profile_compliance_monthly.csv", limit=12),
-            case_rows=load_small_table(record, "cases_table.csv", limit=12),
-            cross_rows=load_small_table(record, "sensitivity_cross_table.csv", limit=12),
+            metric_cards=_safe_call(lambda: load_metric_cards(record), default=[]),
+            energy_table=_safe_call(lambda: load_energy_table(record), default=[]),
+            compliance_rows=_safe_call(
+                lambda: load_small_table(record, "base_case_profile_compliance_monthly.csv", limit=12),
+                default=[],
+            ),
+            case_rows=_safe_call(lambda: load_small_table(record, "cases_table.csv", limit=12), default=[]),
+            cross_rows=_safe_call(
+                lambda: load_small_table(record, "sensitivity_cross_table.csv", limit=12),
+                default=[],
+            ),
             chart_cards=[card for card in chart_cards if card.svg],
             chart_options=chart_options,
             selected_chart_dataset=selected_chart_dataset,
             preview=preview,
             preview_artifact=preview_artifact,
+            can_start_study=job_manager.current_job() is None or not job_manager.current_job().is_active,
             artifact_label=artifact_label,
             dataset_label=dataset_label,
         )
 
     return app
+
+
+def _redirect_back() -> Response:
+    next_target = request.form.get("next")
+    if next_target:
+        return redirect(next_target)
+    return redirect(request.referrer or url_for("index"))
+
+
+def _safe_call(fn: Any, *, default: Any) -> Any:
+    try:
+        return fn()
+    except Exception:
+        return default
 
 
 def main(argv: Sequence[str] | None = None) -> int:

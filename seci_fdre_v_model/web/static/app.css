@@ -242,9 +242,25 @@ a {
   filter: brightness(1.05);
 }
 
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+  filter: none;
+}
+
 .button-ghost {
   background: #e2e8f0;
   color: var(--ink);
+}
+
+.button-danger {
+  background: var(--danger);
+  color: white;
+}
+
+.button-subtle {
+  background: #f1f5f9;
+  color: var(--danger);
 }
 
 .button-link {
@@ -344,9 +360,20 @@ th.number {
   color: #92400e;
 }
 
+.status-queued,
+.status-cancelling {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
 .status-completed {
   background: var(--brand-soft);
   color: var(--brand);
+}
+
+.status-cancelled {
+  background: #e2e8f0;
+  color: #475569;
 }
 
 .status-failed {
@@ -384,6 +411,18 @@ th.number {
 .progress-card {
   width: min(380px, calc(100vw - 3rem));
   padding: 1rem;
+}
+
+.progress-job-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
+  margin: 0.55rem 0 0;
+}
+
+.action-row-tight {
+  gap: 0.65rem;
 }
 
 .progress-bar {
