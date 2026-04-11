@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import socket
+import sys
 import threading
 import time
 import urllib.error
@@ -16,6 +18,64 @@ from typing import Any, Callable, Sequence
 
 from seci_fdre_v_model.runtime import default_windows_workspace_root, resolve_seed_source_config_path
 from seci_fdre_v_model.web.app import create_app
+
+
+def _setup_windows_console() -> None:
+    """Attach a console to a windowed (pythonw / PyInstaller GUI) process on Windows."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32
+    if kernel32.GetConsoleWindow():
+        return
+    if not kernel32.AllocConsole():
+        return
+    conout = open("CONOUT$", "w", encoding="utf-8", errors="replace", buffering=1)  # noqa: SIM115
+    sys.stdout = conout
+    sys.stderr = conout
+
+
+def setup_desktop_logging(workspace: Path, *, console: bool = False) -> Path:
+    """
+    Send logs to ``<workspace>/control_room.log`` and optionally mirror to a console.
+
+    Use ``SECI-FDRE-V.exe --console`` (or ``--console`` with the desktop entry point) to see
+    stderr/stdout while debugging; the log file is always written for the packaged app.
+    """
+    if console:
+        _setup_windows_console()
+
+    log_path = (workspace / "control_room.log").resolve()
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    # Avoid duplicate handlers if launch_desktop_app is re-invoked in the same process (tests).
+    for h in list(root.handlers):
+        if isinstance(h, logging.FileHandler):
+            try:
+                if Path(h.baseFilename).resolve() == log_path:
+                    root.removeHandler(h)
+            except OSError:
+                continue
+
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    fh = logging.FileHandler(log_path, encoding="utf-8", mode="a")
+    fh.setFormatter(fmt)
+    fh.setLevel(logging.INFO)
+    root.addHandler(fh)
+
+    if console and sys.stdout is not None:
+        ch = logging.StreamHandler(sys.stdout)
+        ch.setFormatter(fmt)
+        ch.setLevel(logging.INFO)
+        root.addHandler(ch)
+
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
+    logging.getLogger("waitress.queue").setLevel(logging.WARNING)
+    logging.info("SECI FDRE-V desktop logging initialized (workspace=%s, log=%s)", workspace, log_path)
+    return log_path
 
 
 def find_free_port(host: str = "127.0.0.1") -> int:
@@ -154,6 +214,7 @@ def launch_desktop_app(
     workspace_root: str | Path | None = None,
     port: int | None = None,
     open_browser_on_start: bool = True,
+    console: bool = False,
     server_factory: Callable[..., WaitressServer] = WaitressServer,
     tray_factory: Callable[..., DesktopTrayApp] = DesktopTrayApp,
     wait_for_health_fn: Callable[..., None] = wait_for_health,
@@ -165,6 +226,7 @@ def launch_desktop_app(
         else default_windows_workspace_root()
     )
     resolved_workspace.mkdir(parents=True, exist_ok=True)
+    setup_desktop_logging(resolved_workspace, console=console)
     resolved_port = port or find_free_port()
     app_url = build_app_url("127.0.0.1", resolved_port)
 
@@ -190,13 +252,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--workspace", default=None)
     parser.add_argument("--port", default=None, type=int)
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument(
+        "--console",
+        action="store_true",
+        help="Allocate a console window (Windows) and mirror logs to stdout; always writes control_room.log in the workspace.",
+    )
     args = parser.parse_args(argv)
     return launch_desktop_app(
         workspace_root=args.workspace,
         port=args.port,
         open_browser_on_start=not args.no_browser,
+        console=args.console,
     )
 
 
 if __name__ == "__main__":
+    import multiprocessing
+
+    multiprocessing.freeze_support()
     raise SystemExit(main())

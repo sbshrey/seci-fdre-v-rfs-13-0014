@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import re
 import threading
 from dataclasses import replace
@@ -62,6 +63,8 @@ from seci_fdre_v_model.web.services import (
     store_uploaded_input,
     update_run_status,
 )
+
+_study_logger = logging.getLogger("seci_fdre_v_model.web.study")
 
 CONFIG_SELECT_OPTIONS = {
     "simulation.preprocessing.frequency": [("1m", "1 minute")],
@@ -175,6 +178,7 @@ class StudyJobManager:
                     error=str(exc),
                 )
             except Exception as exc:
+                _study_logger.exception("Background study job failed (run_id=%s)", run_id)
                 try:
                     record = get_run_record(state, run_id)
                     finished_at = record.finished_at or _iso_now()
@@ -197,7 +201,9 @@ class StudyJobManager:
                     if self._job is not None and not self._job.is_active:
                         self._job = None
 
-        thread = threading.Thread(target=worker, daemon=True)
+        # Non-daemon: on Windows, ProcessPoolExecutor (sensitivity cases) cannot spawn worker
+        # processes from a daemon thread; frozen .exe would run cases serially or fail silently.
+        thread = threading.Thread(target=worker, name="study-job", daemon=False)
         with self._lock:
             self._thread = thread
         thread.start()
@@ -688,6 +694,12 @@ def _safe_call(fn: Any, *, default: Any) -> Any:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    import multiprocessing
+    import sys as _sys
+
+    if getattr(_sys, "frozen", False):
+        multiprocessing.freeze_support()
+
     parser = argparse.ArgumentParser(description="Run the SECI FDRE-V control room.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=5000, type=int)

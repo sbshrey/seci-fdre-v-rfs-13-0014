@@ -121,3 +121,5 @@ For the end user:
 3. double-click `SECI-FDRE-V.exe`
 4. use the browser UI that opens automatically
 5. quit from the system tray icon when finished
+
+**Debugging the packaged app:** the GUI build has no console. Logs are appended to `%LOCALAPPDATA%\SECI FDRE V\control_room.log` (same folder as the default workspace). Run `SECI-FDRE-V.exe --console` to open a Windows console and mirror logs there as well. If a study appears stuck (for example near 40% during sensitivity cases), check that log file for tracebacks; parallel sensitivity work can take a long time on large configs.
