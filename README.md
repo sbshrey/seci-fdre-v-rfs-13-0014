@@ -112,7 +112,7 @@ py -3.11 -m venv .venv
 .\release\windows\build-portable.ps1
 ```
 
-That script installs the desktop-build dependencies, runs the web and desktop tests, builds a PyInstaller one-folder app, and creates `dist/SECI-FDRE-V-windows-portable.zip`.
+That script installs the desktop-build dependencies, runs the web and desktop tests, builds a PyInstaller one-folder app, and creates `dist/SECI-FDRE-V-windows-portable.zip`. It first removes `dist/` and `build/`; if Explorer or a running `SECI-FDRE-V.exe` locks files, run `.\release\windows\clear-build-artifacts.ps1` alone (it retries with a robocopy empty-folder purge) or close those handles and retry.
 
 For the end user:
 

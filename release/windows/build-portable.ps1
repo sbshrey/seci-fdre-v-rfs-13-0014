@@ -6,8 +6,11 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
-Set-Location $repoRoot
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+Set-Location -LiteralPath $repoRoot
+
+Write-Host "Clearing dist/ and build/ (robocopy purge if normal delete fails)..."
+& (Join-Path $PSScriptRoot "clear-build-artifacts.ps1") -RepoRoot $repoRoot
 
 & $Python -m pip install -e ".[dev,windows]"
 
