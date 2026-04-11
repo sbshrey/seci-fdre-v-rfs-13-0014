@@ -6,8 +6,15 @@ import json
 import time
 from pathlib import Path
 
+import yaml
+
 from seci_fdre_v_model.web.app import create_app
-from seci_fdre_v_model.web.services import ensure_workspace_ready, load_project_config, save_project_form
+from seci_fdre_v_model.web.services import (
+    create_run_snapshot,
+    ensure_workspace_ready,
+    load_project_config,
+    save_project_form,
+)
 
 
 def test_workspace_bootstrap_and_form_save(tmp_path: Path) -> None:
@@ -76,10 +83,12 @@ def test_web_control_room_flow(tmp_path: Path) -> None:
     response = client.get("/inputs")
     assert response.status_code == 200
     assert b"Workspace Input Files" in response.data
+    assert b"Ideal 1 MW workflow" in response.data
     assert (workspace_root / "inputs" / "solar.csv").exists()
 
     config_response = client.get("/config")
     assert config_response.status_code == 200
+    assert b'name="study_profile"' in config_response.data
     assert b'<select name="simulation.preprocessing.gap_fill">' in config_response.data
     assert b'<select name="simulation.preprocessing.simulation_dtype">' in config_response.data
     assert b'name="simulation.load.profile_mode"' in config_response.data
@@ -111,13 +120,14 @@ def test_web_control_room_flow(tmp_path: Path) -> None:
 
     start_response = client.post("/runs/study", data={"next": "/runs"}, follow_redirects=True)
     assert start_response.status_code == 200
-    assert b"Study started in background" in start_response.data
+    assert b"Study started (Workspace config)" in start_response.data
 
     run_id = None
     for _ in range(80):
         job_payload = client.get("/api/job-status").get_json()
         job = job_payload["job"]
         if job:
+            assert job.get("study_profile") == "workspace"
             run_id = job["run_id"]
             if not job["is_active"]:
                 break
@@ -130,7 +140,6 @@ def test_web_control_room_flow(tmp_path: Path) -> None:
     assert (run_dir / "package" / "base_summary.csv").exists()
     assert (run_dir / "package" / "cases_table.csv").exists()
     assert (run_dir / "package" / "test_plant.xlsx").exists()
-    assert (run_dir / "package" / "test_plant.zip").exists()
 
     dashboard_response = client.get(f"/runs/{run_id}")
     assert dashboard_response.status_code == 200
@@ -142,6 +151,16 @@ def test_web_control_room_flow(tmp_path: Path) -> None:
     cards = chart_response.get_json()
     assert cards
     assert any(card["title"] == "Battery SOC" for card in cards)
+
+    expand_response = client.get(f"/api/charts/{run_id}/base_case_minute_flows.parquet?expanded=1&index=2")
+    assert expand_response.status_code == 200
+    enlarged = expand_response.get_json()
+    assert enlarged["title"] == "Battery SOC"
+    assert "<svg" in enlarged["svg"]
+
+    assert client.get(f"/api/charts/{run_id}/base_case_minute_flows.parquet?expanded=1").status_code == 400
+    assert client.get(f"/api/charts/{run_id}/base_case_minute_flows.parquet?expanded=1&index=99").status_code == 404
+    assert client.get("/api/charts/not-a-real-run/base_case_minute_flows.parquet").status_code == 404
 
     artifact_response = client.get(f"/runs/{run_id}/artifacts/base_summary.csv")
     assert artifact_response.status_code == 200
@@ -165,7 +184,7 @@ def test_single_background_job_cancel_and_delete(tmp_path: Path, monkeypatch) ->
 
     start_response = client.post("/runs/study", data={"next": "/runs"}, follow_redirects=True)
     assert start_response.status_code == 200
-    assert b"Study started in background" in start_response.data
+    assert b"Study started (Workspace config)" in start_response.data
 
     running_payload = client.get("/api/job-status").get_json()
     assert running_payload["job"] is not None
@@ -192,12 +211,17 @@ def test_single_background_job_cancel_and_delete(tmp_path: Path, monkeypatch) ->
     cancelled_payload = None
     for _ in range(80):
         cancelled_payload = client.get("/api/job-status").get_json()
-        if cancelled_payload["job"] and not cancelled_payload["job"]["is_active"]:
+        job = cancelled_payload["job"]
+        if job is None or not job["is_active"]:
             break
         time.sleep(0.05)
 
     assert cancelled_payload is not None
-    assert cancelled_payload["job"]["status"] == "cancelled"
+    if cancelled_payload["job"] is not None:
+        assert cancelled_payload["job"]["status"] == "cancelled"
+    run_json = workspace_root / "runs" / run_id / "run.json"
+    run_payload = json.loads(run_json.read_text(encoding="utf-8"))
+    assert run_payload.get("status") == "cancelled"
     assert (workspace_root / "runs" / run_id).exists()
 
     delete_response = client.post(f"/runs/{run_id}/delete", data={"next": "/runs"}, follow_redirects=True)
@@ -343,3 +367,70 @@ def _write_csv(path: Path, header: list[str], rows: list[list[str]]) -> None:
         writer = csv.writer(handle)
         writer.writerow(header)
         writer.writerows(rows)
+
+
+def test_api_aligned_energy_report(tmp_path: Path) -> None:
+    source_config = _write_project_config(tmp_path)
+    workspace_root = tmp_path / ".workspace"
+    app = create_app(workspace_root=workspace_root, source_config_path=source_config)
+    client = app.test_client()
+
+    report = client.get("/api/aligned-energy-report?excess_fraction=0.1")
+    assert report.status_code == 200
+    body = report.get_json()
+    assert body["ok"] is True
+    assert body["summary"]["minutes"] == 6
+    assert "solar_kwh" in body["summary"]
+    assert "suggestions" in body
+    assert body["suggestions"]["annual_load_to_generation_ratio"] > 0
+    assert "uniform_renewable_scale" in body["suggestions"]
+
+
+def test_api_config_form_preview_workspace_vs_ideal(tmp_path: Path) -> None:
+    source_config = _write_project_config(tmp_path)
+    workspace_root = tmp_path / ".workspace"
+    app = create_app(workspace_root=workspace_root, source_config_path=source_config)
+    client = app.test_client()
+
+    ws = client.get("/api/config-form-preview?study_profile=workspace").get_json()
+    assert ws["study_profile"] == "workspace"
+    assert ws["editable"] is True
+    assert ws["fields"]["project.plant_name"] == "test_plant"
+
+    ideal = client.get("/api/config-form-preview?study_profile=ideal_1mw").get_json()
+    assert ideal["study_profile"] == "ideal_1mw"
+    assert ideal["editable"] is False
+    assert ideal["fields"]["project.plant_name"] == "ideal_1mw_fdre"
+
+
+def test_create_run_snapshot_ideal_profile_uses_bundled_plant_name(tmp_path: Path) -> None:
+    source_config = _write_project_config(tmp_path)
+    workspace_root = tmp_path / ".workspace"
+    state = ensure_workspace_ready(workspace_root, source_config_path=source_config)
+    _run_id, run_dir, config_path, _package_dir = create_run_snapshot(state, study_profile="ideal_1mw")
+    snapshot = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert snapshot["project"]["plant_name"] == "ideal_1mw_fdre"
+    assert snapshot["inputs"]["solar_path"] == "../inputs/solar.csv"
+    assert (run_dir / "inputs" / "solar.csv").exists()
+
+
+def test_apply_ideal_preset_and_ideal_tile_web(tmp_path: Path) -> None:
+    source_config = _write_project_config(tmp_path)
+    workspace_root = tmp_path / ".workspace"
+    app = create_app(workspace_root=workspace_root, source_config_path=source_config)
+    client = app.test_client()
+
+    tile = client.post("/runs/ideal-tile-profiles", data={"solar_scale": "1", "wind_scale": "1"}, follow_redirects=True)
+    assert tile.status_code == 200
+    solar_csv = workspace_root / "inputs" / "solar.csv"
+    assert solar_csv.exists()
+    line_count = solar_csv.read_text(encoding="utf-8").count("\n")
+    assert line_count >= 7
+
+    apply_resp = client.post("/runs/apply-ideal-preset", follow_redirects=True)
+    assert apply_resp.status_code == 200
+
+    workspace = ensure_workspace_ready(workspace_root, source_config_path=source_config)
+    project = load_project_config(workspace)
+    assert project.simulation.battery.nominal_power_kw == 1000.0
+    assert project.sensitivity.wind_multipliers == [1.0]

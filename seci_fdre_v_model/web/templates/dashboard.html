@@ -11,8 +11,9 @@
     <form method="post" action="{{ url_for('generate_inputs') }}">
       <button class="button button-ghost" type="submit">Generate Profiles</button>
     </form>
-    <form method="post" action="{{ url_for('start_study_job') }}">
+    <form method="post" action="{{ url_for('start_study_job') }}" class="run-study-form">
       <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
+      {% include "_study_profile_run.html" %}
       <button class="button" type="submit" data-start-study-button {% if current_job and current_job.is_active %}disabled{% endif %}>
         {% if current_job and current_job.is_active %}Study Running{% else %}Run Study{% endif %}
       </button>
@@ -131,6 +132,15 @@
             <h3>Energy Table</h3>
             <span class="panel-note">Annual SOURCES / USES / LOSS</span>
           </div>
+          {% if selected_run and selected_run.summary_metrics.get('solar_nonzero_fraction_pct', 100) < 5 %}
+            <p class="section-note">
+              Solar and wind totals sum only minutes where aligned <code>solar_kw</code> / <code>wind_kw</code> are non-zero
+              ({{ "{:.1f}".format(selected_run.summary_metrics.get('solar_nonzero_fraction_pct', 0)) }}% /
+              {{ "{:.1f}".format(selected_run.summary_metrics.get('wind_nonzero_fraction_pct', 0)) }}% of rows).
+              If that share is tiny while output spans the full year, short input CSVs were padded with zeros after
+              <code>align_to_full_year</code> — tile full-year solar/wind before expecting balanced SOURCES vs USES.
+            </p>
+          {% endif %}
           <div class="table-wrap">
             <table>
               <thead>
@@ -158,6 +168,14 @@
             <h3>Monthly Compliance</h3>
             <span class="panel-note">First 12 rows</span>
           </div>
+          {% if not compliance_rows %}
+            <p class="section-note">
+              No monthly compliance table for this run. It is only written when the snapshot uses
+              <strong>template</strong> load mode (tender profile DFR blocks). If <code>simulation.load.profile_mode</code>
+              is <strong>flat</strong>, or the artifact <code>base_case_profile_compliance_monthly.csv</code> is missing
+              from the run package, this panel stays empty.
+            </p>
+          {% endif %}
           <div class="table-wrap">
             <table>
               <thead>
@@ -187,7 +205,7 @@
         <div class="panel-header panel-header-stack">
           <div>
             <h3>Charts</h3>
-            <p class="section-note">Switch between curated chart datasets without reloading the page.</p>
+            <p class="section-note">Switch between curated chart datasets without reloading the page. Click a chart to open a large view.</p>
           </div>
           <div class="tab-row">
             {% for option in chart_options %}
@@ -201,9 +219,18 @@
             {% endfor %}
           </div>
         </div>
-        <div class="chart-grid" data-chart-grid>
+        <div
+          class="chart-grid"
+          data-chart-grid
+          data-run-id="{{ selected_run.run_id }}"
+          data-chart-dataset="{{ selected_chart_dataset }}">
           {% for chart in chart_cards %}
-            <article class="chart-card">
+            <article
+              class="chart-card chart-card-expandable"
+              data-chart-index="{{ loop.index0 }}"
+              role="button"
+              tabindex="0"
+              title="Click to enlarge">
               <div class="panel-header panel-header-stack">
                 <div>
                   <h4>{{ chart.title }}</h4>
@@ -213,6 +240,26 @@
               <div class="chart-wrap">{{ chart.svg|safe }}</div>
             </article>
           {% endfor %}
+        </div>
+
+        <div class="chart-modal" data-chart-modal hidden>
+          <div class="chart-modal-backdrop" data-chart-modal-close aria-hidden="true"></div>
+          <div
+            class="chart-modal-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="chart-modal-title">
+            <div class="chart-modal-header">
+              <div>
+                <h4 id="chart-modal-title" data-chart-modal-title></h4>
+                <p class="section-note" data-chart-modal-subtitle></p>
+              </div>
+              <button type="button" class="chart-modal-close" data-chart-modal-close aria-label="Close enlarged chart">
+                ×
+              </button>
+            </div>
+            <div class="chart-modal-body" data-chart-modal-body></div>
+          </div>
         </div>
       </article>
 

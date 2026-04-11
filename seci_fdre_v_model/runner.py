@@ -18,7 +18,7 @@ from seci_fdre_v_model.core.pipeline import (
 )
 from seci_fdre_v_model.scenarios import build_case_rows, build_cross_table_rows
 from seci_fdre_v_model.tender_inputs import generate_tender_input_files
-from seci_fdre_v_model.workbook_export import export_study_workbook
+from seci_fdre_v_model.workbook_export import write_summary_workbook
 
 ProgressCallback = Callable[[str, float, str], None]
 
@@ -27,7 +27,6 @@ ProgressCallback = Callable[[str, float, str], None]
 class StudyRunResult:
     package_dir: Path
     workbook_path: Path
-    archive_path: Path
 
 
 def run_full_study(
@@ -83,14 +82,11 @@ def run_full_study(
     pl.DataFrame(cross_rows).write_csv(target_dir / "sensitivity_cross_table.csv")
     _build_profile_index(config).write_csv(target_dir / "profile_files_index.csv")
 
-    emit("Workbook", 94, "Building workbook and package archive")
-    workbook_path, archive_path = export_study_workbook(
-        target_dir,
-        output=target_dir / f"{package_name}.xlsx",
-        archive_output=(target_dir / f"{package_name}.zip") if package_dir is not None else None,
-    )
+    workbook_output = target_dir / f"{package_name}.xlsx"
+    emit("Workbook", 94, "Writing Excel summary workbook")
+    workbook_path = write_summary_workbook(target_dir, output=workbook_output)
     emit("Done", 100, f"Study package written to {target_dir}")
-    return StudyRunResult(package_dir=target_dir, workbook_path=workbook_path, archive_path=archive_path)
+    return StudyRunResult(package_dir=target_dir, workbook_path=workbook_path)
 
 
 def _resolve_package_dir(config: ProjectConfig, package_dir: str | Path | None) -> Path:

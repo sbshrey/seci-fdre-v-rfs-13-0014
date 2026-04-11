@@ -1,0 +1,87 @@
+# Example "balanced" 1 MW (contracted) FDRE study configuration.
+#
+# Web control room: "Ideal 1 MW example" still uses workspace inputs/solar.csv and inputs/wind.csv. If those
+# files are only a one-day sample while simulation uses a full year (align_to_full_year), the aligner fills the
+# rest of the year with zero RE — grid import explodes and battery discharge looks tiny. Tile profiles first
+# (Inputs → Ideal 1 MW workflow → Tile, or CLI build-ideal-year-profiles) so solar/wind span the full horizon.
+#
+# Setup (from repo root):
+#   1) Tile seed solar/wind across the full simulation year:
+#        python main.py build-ideal-year-profiles --config config/project.yaml
+#      (writes data/ideal/generated_solar_2025.csv and generated_wind_2025.csv)
+#   2) Regenerate tender output profile + aux into data/ideal/:
+#        python main.py generate-input-files --config config/project.ideal_1mw.yaml
+#   3) Check solar/wind vs load on the aligned minute table (before BESS):
+#        python main.py report-aligned-energy --config config/project.ideal_1mw.yaml
+#   4) Run the study:
+#        python main.py run --config config/project.ideal_1mw.yaml
+#
+# Tweak annual RE vs load using build-ideal-year-profiles --solar-scale / --wind-scale
+# or simulation.data.solar_multiplier / wind_multiplier, or simulation.load.profile_multiplier.
+# Starting profile_multiplier below 1.0 nudges tender output toward typical tiled RE (order-of-magnitude);
+# refine with the web/CLI alignment suggestions after tiling.
+
+project:
+  plant_name: ideal_1mw_fdre
+  output_dir: output_ideal
+  simulation_start: "2025-01-01 00:00"
+  simulation_end: "2025-12-31 23:59"
+
+inputs:
+  solar_path: ../data/ideal/generated_solar_2025.csv
+  wind_path: ../data/ideal/generated_wind_2025.csv
+  output_profile_path: ../data/ideal/output_profile.csv
+  output_profile_18_22_path: ../data/ideal/output_profile_18_22.csv
+  aux_power_path: ../data/ideal/aux_power.csv
+
+simulation:
+  data:
+    solar_enabled: true
+    wind_enabled: true
+    solar_multiplier: 1.0
+    wind_multiplier: 1.0
+  preprocessing:
+    frequency: 1m
+    gap_fill: zero
+    max_interpolation_gap_minutes: 15
+    align_to_full_year: true
+    simulation_dtype: float64
+  grid:
+    export_limit_kw: 1000.0
+    import_limit_kw: 1500.0
+  load:
+    profile_mode: template
+    profile_template_id: seci_fdre_v_amendment_03
+    contracted_capacity_mw: 1.0
+    aux_consumption_kw: 20.0
+    profile_multiplier: 0.24
+  battery:
+    nominal_power_kw: 1000.0
+    duration_hours: 2.0
+    charge_efficiency: 0.96
+    discharge_efficiency: 0.94
+    degradation_per_cycle: 0.0002739726027
+    initial_soc_fraction: 0.5
+    min_soc_fraction: 0.0
+    max_soc_fraction: 1.0
+    charge_loss_table:
+      0.0: 0.0
+      0.2: 0.04
+      0.3: 0.045
+      0.5: 0.07
+      1.0: 0.11
+      1.2: 0.14
+    discharge_loss_table:
+      0.0: 0.0
+      0.2: 0.023
+      0.3: 0.032
+      0.5: 0.042
+      1.0: 0.062
+      1.2: 0.067
+
+sensitivity:
+  wind_multipliers: [1.0]
+  solar_multipliers: [1.0]
+  profile_multipliers: [1.0]
+  battery_capacity_kwh_values: [500.0, 1000.0, 1500.0]
+  battery_duration_hour_values: [2.0]

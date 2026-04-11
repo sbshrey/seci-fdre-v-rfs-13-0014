@@ -19,16 +19,23 @@ from flask import (
     render_template,
     request,
     send_file,
+    session,
     url_for,
 )
 
 from seci_fdre_v_model.profile_templates import SUPPORTED_TENDER_PROFILES
+from seci_fdre_v_model.runtime import bundled_root
 from seci_fdre_v_model.web.models import BackgroundJob
 from seci_fdre_v_model.web.services import (
     StudyCancelledError,
+    aligned_energy_report_payload,
+    apply_alignment_profile_scale,
+    apply_alignment_renewable_scales,
+    apply_ideal_study_preset,
     artifact_label,
     build_dataset_chart_cards,
     chart_dataset_options,
+    config_form_api_values,
     create_run_snapshot,
     dataset_label,
     delete_run_record,
@@ -38,8 +45,11 @@ from seci_fdre_v_model.web.services import (
     generate_active_inputs,
     get_latest_run_record,
     get_run_record,
+    ideal_tile_generation_profiles,
     list_managed_inputs,
     list_run_records,
+    normalize_study_profile,
+    project_config_for_study_profile_preview,
     load_energy_table,
     load_metric_cards,
     load_project_config,
@@ -84,18 +94,24 @@ class StudyJobManager:
         with self._lock:
             return self._job
 
-    def start(self, *, dump_sections: bool = False) -> BackgroundJob:
+    def start(self, *, dump_sections: bool = False, study_profile: str = "workspace") -> BackgroundJob:
         with self._lock:
             if self._job is not None and self._job.is_active:
                 raise RuntimeError("A study is already running. Stop it before starting another job.")
             state = self._workspace_factory()
-            run_id, run_dir, config_path, package_dir = create_run_snapshot(state)
+            profile = normalize_study_profile(study_profile)
+            run_id, run_dir, config_path, package_dir = create_run_snapshot(state, study_profile=profile)
+            detail = (
+                f"Study queued ({profile} config snapshot)."
+                if profile != "workspace"
+                else "Study queued in the background."
+            )
             job = BackgroundJob(
                 run_id=run_id,
                 status="queued",
                 stage="Queued",
                 pct=0.0,
-                detail="Study queued in the background.",
+                detail=detail,
                 completed_cases=None,
                 total_cases=None,
                 current_case_id=None,
@@ -104,6 +120,7 @@ class StudyJobManager:
                 finished_at=None,
                 error=None,
                 cancel_requested=False,
+                study_profile=profile,
             )
             cancel_event = threading.Event()
             self._job = job
@@ -175,6 +192,8 @@ class StudyJobManager:
                 with self._lock:
                     self._thread = None
                     self._cancel_event = None
+                    if self._job is not None and not self._job.is_active:
+                        self._job = None
 
         thread = threading.Thread(target=worker, daemon=True)
         with self._lock:
@@ -261,7 +280,12 @@ def create_app(
     *,
     source_config_path: str | Path | None = None,
 ) -> Flask:
-    app = Flask(__name__, template_folder="templates", static_folder="static")
+    web_root = bundled_root() / "seci_fdre_v_model" / "web"
+    app = Flask(
+        __name__,
+        template_folder=str(web_root / "templates"),
+        static_folder=str(web_root / "static"),
+    )
     app.config["SECRET_KEY"] = "seci-fdre-v-local"
     app.config["WORKSPACE_ROOT"] = str(workspace_root) if workspace_root is not None else None
     app.config["SOURCE_CONFIG_PATH"] = str(source_config_path) if source_config_path is not None else None
@@ -277,15 +301,30 @@ def create_app(
     @app.context_processor
     def inject_nav_context() -> dict[str, Any]:
         state = workspace()
+        selected = normalize_study_profile(session.get("study_profile"))
         return {
             "workspace_root": str(state.root),
             "current_job": job_manager.current_job(),
+            "selected_study_profile": selected,
         }
 
     @app.get("/health")
     @app.get("/api/health")
     def health() -> Response:
         return jsonify({"status": "ok"})
+
+    @app.get("/api/config-form-preview")
+    def api_config_form_preview() -> Response:
+        state = workspace()
+        profile = normalize_study_profile(request.args.get("study_profile"))
+        project = project_config_for_study_profile_preview(state, profile)
+        return jsonify(
+            {
+                "study_profile": profile,
+                "editable": profile == "workspace",
+                "fields": config_form_api_values(project),
+            }
+        )
 
     @app.get("/")
     def index() -> str | Response:
@@ -355,11 +394,86 @@ def create_app(
             flash(f"Failed to generate input files: {exc}", "error")
         return redirect(request.referrer or url_for("inputs_page"))
 
+    @app.post("/runs/apply-ideal-preset")
+    def apply_ideal_preset() -> Response:
+        state = workspace()
+        try:
+            apply_ideal_study_preset(state)
+            flash("Ideal 1 MW preset applied (simulation + sensitivity). Inputs paths stay on workspace CSVs.", "success")
+        except Exception as exc:
+            flash(f"Failed to apply ideal preset: {exc}", "error")
+        return redirect(request.referrer or url_for("inputs_page"))
+
+    @app.post("/runs/ideal-tile-profiles")
+    def ideal_tile_profiles() -> Response:
+        state = workspace()
+        job = job_manager.current_job()
+        if job is not None and job.is_active:
+            flash("Stop the running study before tiling full-year solar/wind.", "error")
+            return redirect(request.referrer or url_for("inputs_page"))
+        try:
+            solar_scale = float(request.form.get("solar_scale") or 1.0)
+            wind_scale = float(request.form.get("wind_scale") or 1.0)
+            ideal_tile_generation_profiles(state, solar_scale=solar_scale, wind_scale=wind_scale)
+            flash("Solar and wind tiled across the simulation horizon (workspace solar.csv / wind.csv updated).", "success")
+        except Exception as exc:
+            flash(f"Failed to tile profiles: {exc}", "error")
+        return redirect(request.referrer or url_for("inputs_page"))
+
+    @app.get("/api/aligned-energy-report")
+    def api_aligned_energy_report() -> Response:
+        state = workspace()
+        try:
+            raw = request.args.get("excess_fraction", "0.08")
+            try:
+                excess_fraction = float(raw)
+            except (TypeError, ValueError):
+                excess_fraction = 0.08
+            payload = aligned_energy_report_payload(state, excess_fraction=excess_fraction)
+            return jsonify({"ok": True, **payload, "excess_fraction": excess_fraction})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+    @app.post("/runs/apply-alignment-renewables")
+    def apply_alignment_renewables_route() -> Response:
+        state = workspace()
+        job = job_manager.current_job()
+        if job is not None and job.is_active:
+            flash("Stop the running study before changing alignment scales.", "error")
+            return redirect(request.referrer or url_for("inputs_page"))
+        try:
+            raw = request.form.get("excess_fraction") or "0.08"
+            excess_fraction = float(raw)
+            apply_alignment_renewable_scales(state, excess_fraction=excess_fraction)
+            flash("Solar and wind multipliers updated from alignment suggestion.", "success")
+        except Exception as exc:
+            flash(f"Failed to apply renewable scales: {exc}", "error")
+        return redirect(request.referrer or url_for("inputs_page"))
+
+    @app.post("/runs/apply-alignment-profile")
+    def apply_alignment_profile_route() -> Response:
+        state = workspace()
+        job = job_manager.current_job()
+        if job is not None and job.is_active:
+            flash("Stop the running study before changing alignment scales.", "error")
+            return redirect(request.referrer or url_for("inputs_page"))
+        try:
+            raw = request.form.get("excess_fraction") or "0.08"
+            excess_fraction = float(raw)
+            apply_alignment_profile_scale(state, excess_fraction=excess_fraction)
+            flash("Profile multiplier updated from alignment suggestion.", "success")
+        except Exception as exc:
+            flash(f"Failed to apply profile scale: {exc}", "error")
+        return redirect(request.referrer or url_for("inputs_page"))
+
     @app.post("/runs/study")
     def start_study_job() -> Response:
         try:
-            job = job_manager.start(dump_sections=False)
-            flash(f"Study started in background. Run ID: {job.run_id}", "success")
+            profile = normalize_study_profile(request.form.get("study_profile"))
+            session["study_profile"] = profile
+            job = job_manager.start(dump_sections=False, study_profile=profile)
+            label = "Ideal 1 MW example" if profile == "ideal_1mw" else "Workspace"
+            flash(f"Study started ({label} config). Run ID: {job.run_id}", "success")
         except Exception as exc:
             flash(str(exc), "error")
         return _redirect_back()
@@ -407,6 +521,7 @@ def create_app(
                     "error": job.error,
                     "cancel_requested": job.cancel_requested,
                     "is_active": job.is_active,
+                    "study_profile": job.study_profile,
                     "run_url": url_for("run_dashboard", run_id=job.run_id) if job.run_id else None,
                     "delete_url": url_for("delete_run", run_id=job.run_id) if job.run_id else None,
                 },
@@ -447,8 +562,30 @@ def create_app(
     @app.get("/api/charts/<run_id>/<path:dataset>")
     def api_charts(run_id: str, dataset: str) -> Response:
         state = workspace()
-        record = get_run_record(state, run_id)
-        cards = _safe_call(lambda: build_dataset_chart_cards(record, dataset), default=[])
+        try:
+            record = get_run_record(state, run_id)
+        except FileNotFoundError:
+            return jsonify({"error": "Run not found"}), 404
+
+        expanded = (request.args.get("expanded") or "").lower() in ("1", "true", "yes")
+        chart_index = request.args.get("index", type=int)
+        svg_width, svg_height = (2000, 820) if expanded else (1520, 560)
+
+        cards = _safe_call(
+            lambda: build_dataset_chart_cards(record, dataset, svg_width=svg_width, svg_height=svg_height),
+            default=[],
+        )
+
+        if expanded:
+            if chart_index is None:
+                return jsonify({"error": "expanded=1 requires index"}), 400
+            if not (0 <= chart_index < len(cards)):
+                return jsonify({"error": "Chart index out of range"}), 404
+            card = cards[chart_index]
+            if not card.svg:
+                return jsonify({"error": "Chart has no SVG"}), 404
+            return jsonify({"title": card.title, "subtitle": card.subtitle, "svg": card.svg})
+
         return jsonify(
             [
                 {"title": card.title, "subtitle": card.subtitle, "svg": card.svg}

@@ -6,6 +6,7 @@ import zipfile
 from pathlib import Path
 
 import polars as pl
+import pytest
 
 from seci_fdre_v_model.cli import main
 from seci_fdre_v_model.config import ProjectConfig
@@ -46,7 +47,6 @@ def test_run_full_study_writes_cases_cross_table_and_workbook(tmp_path: Path) ->
     assert (package_dir / "sensitivity_cross_table.csv").exists()
     assert (package_dir / "profile_files_index.csv").exists()
     assert result.workbook_path.exists()
-    assert (package_dir.parent / f"{package_dir.name}.zip").exists()
 
     cases_df = pl.read_csv(package_dir / "cases_table.csv")
     cross_df = pl.read_csv(package_dir / "sensitivity_cross_table.csv")
@@ -60,6 +60,14 @@ def test_run_full_study_writes_cases_cross_table_and_workbook(tmp_path: Path) ->
         "Sensitivity Cross",
         "Profile Files Index",
     ]
+
+    base_metrics = pl.read_csv(package_dir / "base_summary.csv").to_dicts()[0]
+    assert base_metrics.get("generation_equals_solar_plus_wind") == 1
+    et = pl.read_csv(package_dir / "energy_table.csv")
+    solar_sum = float(et.filter(pl.col("element") == "Solar Power")["value_kw_min"][0])
+    wind_sum = float(et.filter(pl.col("element") == "Wind Power")["value_kw_min"][0])
+    assert float(base_metrics["solar_kw_min_sum"]) == pytest.approx(solar_sum)
+    assert float(base_metrics["wind_kw_min_sum"]) == pytest.approx(wind_sum)
 
 
 def test_evening_profile_file_is_nonzero_only_between_18_and_22(tmp_path: Path) -> None:
@@ -104,6 +112,23 @@ def test_float32_uses_relaxed_identity_tolerance() -> None:
     assert _identity_tolerance("float64") == 1e-3
     assert _balance_tolerance_for_dtype("float32") == 1e-2
     assert _balance_tolerance_for_dtype("float64") == 1e-3
+
+
+def test_parallel_cross_table_matches_sequential(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from seci_fdre_v_model.scenarios import build_cross_table_rows
+
+    config_path = _write_project_config(tmp_path)
+    project = ProjectConfig.from_yaml(config_path)
+    generate_tender_input_files(project)
+
+    monkeypatch.setenv("SECI_FDRE_V_SCENARIO_WORKERS", "1")
+    sequential = build_cross_table_rows(project)
+
+    monkeypatch.setenv("SECI_FDRE_V_SCENARIO_WORKERS", "4")
+    parallel = build_cross_table_rows(project)
+
+    key = lambda row: str(row["case_id"])
+    assert sorted(sequential, key=key) == sorted(parallel, key=key)
 
 
 def _write_project_config(

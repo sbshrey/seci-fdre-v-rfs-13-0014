@@ -8,8 +8,9 @@
     <p class="section-note">Immutable run packages stored under the workspace `runs/` directory.</p>
   </div>
   <div class="action-row">
-    <form method="post" action="{{ url_for('start_study_job') }}">
+    <form method="post" action="{{ url_for('start_study_job') }}" class="run-study-form">
       <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
+      {% include "_study_profile_run.html" %}
       <button class="button" type="submit" data-start-study-button {% if current_job and current_job.is_active %}disabled{% endif %}>
         {% if current_job and current_job.is_active %}Study Running{% else %}Run Study{% endif %}
       </button>

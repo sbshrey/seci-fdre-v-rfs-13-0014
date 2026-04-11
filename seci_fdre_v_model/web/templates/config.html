@@ -8,8 +8,9 @@
     <p class="section-note">Form-only editing for the workspace copy of `project.yaml`.</p>
   </div>
   <div class="action-row">
-    <form method="post" action="{{ url_for('start_study_job') }}">
+    <form method="post" action="{{ url_for('start_study_job') }}" class="run-study-form">
       <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
+      {% include "_study_profile_run.html" %}
       <button class="button" type="submit" data-start-study-button {% if current_job and current_job.is_active %}disabled{% endif %}>
         {% if current_job and current_job.is_active %}Study Running{% else %}Run Study{% endif %}
       </button>
@@ -17,7 +18,14 @@
   </div>
 </section>
 
-<form method="post" action="{{ url_for('save_config') }}" class="config-form" data-config-form>
+<p class="section-note" data-study-profile-form-hint hidden></p>
+
+<form
+  method="post"
+  action="{{ url_for('save_config') }}"
+  class="config-form"
+  data-config-form
+  data-initial-study-profile="{{ selected_study_profile }}">
   <section class="panel form-section">
     <div class="panel-header"><h3>Project</h3></div>
     <div class="form-grid">
@@ -222,7 +230,7 @@
   </section>
 
   <div class="action-row">
-    <button class="button" type="submit">Save Configuration</button>
+    <button class="button" type="submit" data-config-save-button>Save Configuration</button>
   </div>
 </form>
 {% endblock %}

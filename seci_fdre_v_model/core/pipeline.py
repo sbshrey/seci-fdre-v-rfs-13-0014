@@ -69,6 +69,19 @@ def simulate_system(
     minute_data = _align_consumption_to_minute(minute_data, output_profile, aux_power)
     context._progress("Aligning", 12, f"Aligned {minute_data.height} minutes")
 
+    gen_sum = float(minute_data.select((pl.col("solar_kw") + pl.col("wind_kw")).sum()).item())
+    load_sum = float(minute_data.select(pl.col("total_consumption_kw").sum()).item())
+    if load_sum > 0 and gen_sum < 0.05 * load_sum:
+        logger.warning(
+            "Solar+wind annual sum (%.0f kW-min) is below 5%% of total consumption (%.0f kW-min). "
+            "If align_to_full_year is on but solar.csv/wind.csv only cover a short period, missing minutes are "
+            "filled as zero RE, the battery sees little surplus to charge, and grid import dominates the energy table. "
+            "Tile seeds across the study year (CLI: python main.py build-ideal-year-profiles, or web Inputs → "
+            "Ideal 1 MW workflow → Tile profiles), then re-run.",
+            gen_sum,
+            load_sum,
+        )
+
     context._progress("Simulating", 15, f"Running section accounting ({minute_data.height} rows)")
     final_df = run_pipeline(minute_data, context, FLOW_STAGES)
     gc.collect()
@@ -119,6 +132,40 @@ def build_simulation_result(df: pl.DataFrame, config: SimulationConfig) -> Simul
     )
 
 
+def _aligned_generation_coverage(df: pl.DataFrame) -> dict[str, float | int]:
+    """Counts minutes with non-zero RE and sums solar/wind (same basis as the energy table)."""
+    n = df.height
+    if n == 0:
+        return {
+            "solar_nonzero_minutes": 0,
+            "wind_nonzero_minutes": 0,
+            "solar_nonzero_fraction_pct": 0.0,
+            "wind_nonzero_fraction_pct": 0.0,
+            "solar_kw_min_sum": 0.0,
+            "wind_kw_min_sum": 0.0,
+            "total_generation_kw_min_sum": 0.0,
+            "generation_equals_solar_plus_wind": 1,
+        }
+    nz_tol = 1e-9
+    solar_sum = float(df.select(pl.col("solar_kw").sum()).item())
+    wind_sum = float(df.select(pl.col("wind_kw").sum()).item())
+    gen_sum = float(df.select(pl.col("total_generation_kw").sum()).item())
+    solar_nz = int(df.filter(pl.col("solar_kw") > nz_tol).height)
+    wind_nz = int(df.filter(pl.col("wind_kw") > nz_tol).height)
+    tol = max(1e-3, 1e-9 * max(abs(gen_sum), 1.0))
+    gen_ok = abs(gen_sum - (solar_sum + wind_sum)) <= tol
+    return {
+        "solar_nonzero_minutes": solar_nz,
+        "wind_nonzero_minutes": wind_nz,
+        "solar_nonzero_fraction_pct": 100.0 * solar_nz / n,
+        "wind_nonzero_fraction_pct": 100.0 * wind_nz / n,
+        "solar_kw_min_sum": solar_sum,
+        "wind_kw_min_sum": wind_sum,
+        "total_generation_kw_min_sum": gen_sum,
+        "generation_equals_solar_plus_wind": 1 if gen_ok else 0,
+    }
+
+
 def compute_summary_metrics(
     df: pl.DataFrame,
     config: SimulationConfig,
@@ -156,6 +203,7 @@ def compute_summary_metrics(
             block_df=profile_compliance_blocks,
         )
     )
+    metrics.update(_aligned_generation_coverage(df))
     return metrics
 
 
@@ -210,7 +258,13 @@ def _sum_kw_min(df: pl.DataFrame, column: str) -> float:
 
 
 def compute_energy_table(df: pl.DataFrame) -> list[dict[str, str | float]]:
-    """Compute annual energy flows for SOURCES, USES, and LOSS (kW-min)."""
+    """Compute annual energy flows for SOURCES, USES, and LOSS (kW-min).
+
+    Solar and wind rows are ``sum(solar_kw)`` and ``sum(wind_kw)`` over the **aligned** minute table
+    (same series as the simulation), i.e. after CSV multipliers, resampling, and left-join onto the
+    study timeline. Minutes with no matching input row contribute 0 — short CSVs on a full-year
+    horizon therefore yield small RE totals while load can still sum a full year of profile + aux.
+    """
     rows: list[dict[str, str | float]] = []
 
     def add(category: str, element: str, value_kw_min: float) -> None:

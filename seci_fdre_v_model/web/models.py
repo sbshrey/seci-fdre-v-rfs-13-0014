@@ -105,6 +105,7 @@ class BackgroundJob:
     finished_at: str | None
     error: str | None = None
     cancel_requested: bool = False
+    study_profile: str | None = None
 
     @property
     def is_active(self) -> bool:

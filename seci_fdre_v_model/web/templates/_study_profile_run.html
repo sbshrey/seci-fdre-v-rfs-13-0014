@@ -1,0 +1,7 @@
+<label class="inline-field study-profile-select">
+  <span>Study config</span>
+  <select name="study_profile" title="Workspace uses your saved project.yaml; Ideal 1 MW uses bundled example parameters (same workspace CSV inputs).">
+    <option value="workspace" {% if selected_study_profile == 'workspace' %}selected{% endif %}>Workspace (saved YAML)</option>
+    <option value="ideal_1mw" {% if selected_study_profile == 'ideal_1mw' %}selected{% endif %}>Ideal 1 MW example</option>
+  </select>
+</label>

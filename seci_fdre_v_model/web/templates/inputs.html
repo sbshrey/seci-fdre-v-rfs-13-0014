@@ -11,11 +11,71 @@
     <form method="post" action="{{ url_for('generate_inputs') }}">
       <button class="button button-ghost" type="submit">Generate Profiles</button>
     </form>
-    <form method="post" action="{{ url_for('start_study_job') }}">
+    <form method="post" action="{{ url_for('start_study_job') }}" class="run-study-form">
       <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
+      {% include "_study_profile_run.html" %}
       <button class="button" type="submit" data-start-study-button {% if current_job and current_job.is_active %}disabled{% endif %}>
         {% if current_job and current_job.is_active %}Study Running{% else %}Run Study{% endif %}
       </button>
+    </form>
+  </div>
+</section>
+
+<section class="panel ideal-workflow-panel" data-aligned-report>
+  <div class="panel-header panel-header-stack">
+    <div>
+      <h3>Ideal 1 MW workflow</h3>
+      <p class="section-note">
+        Apply the example simulation preset, tile current <code>solar.csv</code> / <code>wind.csv</code> across the
+        configured study dates, regenerate tender profiles, then check solar/wind vs load before running a study.
+        If load energy is far above renewables (common before full-year tiling), use the alignment report suggestions,
+        then apply renewable or profile scales so annual generation can approach load and the BESS sees surplus minutes.
+        Matches the CLI flow documented in <code>config/project.ideal_1mw.yaml</code>.
+      </p>
+    </div>
+  </div>
+  <div class="ideal-workflow-actions action-row action-row-wrap">
+    <form method="post" action="{{ url_for('apply_ideal_preset') }}">
+      <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
+      <button class="button button-ghost" type="submit">Apply ideal preset</button>
+    </form>
+    <form method="post" action="{{ url_for('ideal_tile_profiles') }}" class="ideal-tile-form">
+      <label class="inline-field">
+        <span>Solar scale</span>
+        <input type="number" name="solar_scale" value="1" step="any" min="0" title="Multiplier on tiled solar kW">
+      </label>
+      <label class="inline-field">
+        <span>Wind scale</span>
+        <input type="number" name="wind_scale" value="1" step="any" min="0" title="Multiplier on tiled wind kW">
+      </label>
+      <button class="button button-ghost" type="submit">Tile full-year solar/wind</button>
+    </form>
+    <form method="post" action="{{ url_for('generate_inputs') }}">
+      <button class="button button-ghost" type="submit">Generate profiles</button>
+    </form>
+    <label class="inline-field">
+      <span>Excess target</span>
+      <input
+        type="number"
+        value="0.08"
+        step="0.01"
+        min="0"
+        max="2"
+        data-alignment-excess-fraction
+        title="Heuristic annual target: generation ≈ load × (1 + this). Used for suggestions and apply actions.">
+    </label>
+    <button class="button button-subtle" type="button" data-aligned-report-refresh>Alignment report</button>
+  </div>
+  <p class="section-note ideal-report-hint" data-aligned-report-status hidden></p>
+  <pre class="aligned-report-pre" data-aligned-report-pre hidden></pre>
+  <div class="ideal-workflow-actions action-row action-row-wrap">
+    <form method="post" action="{{ url_for('apply_alignment_renewables_route') }}" class="apply-alignment-form">
+      <input type="hidden" name="excess_fraction" value="0.08" class="alignment-excess-hidden">
+      <button class="button button-ghost" type="submit">Apply renewable scales</button>
+    </form>
+    <form method="post" action="{{ url_for('apply_alignment_profile_route') }}" class="apply-alignment-form">
+      <input type="hidden" name="excess_fraction" value="0.08" class="alignment-excess-hidden">
+      <button class="button button-ghost" type="submit">Apply profile scale</button>
     </form>
   </div>
 </section>

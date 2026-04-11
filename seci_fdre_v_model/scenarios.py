@@ -2,13 +2,63 @@
 
 from __future__ import annotations
 
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from itertools import product
-from typing import Callable
+from typing import Callable, cast
 
 from seci_fdre_v_model.config import ProjectConfig
 from seci_fdre_v_model.core.pipeline import simulate_system
 
 ScenarioProgressCallback = Callable[[int, int, str], None]
+
+
+def _resolve_scenario_workers() -> int:
+    """Worker count for parallel sensitivity runs (process pool).
+
+    ``SECI_FDRE_V_SCENARIO_WORKERS``:
+    - unset or ``auto``: ``min(8, max(1, os.cpu_count() or 4))``
+    - ``1``: sequential execution (no process pool)
+    - positive integer: cap at 32
+    """
+    raw = os.environ.get("SECI_FDRE_V_SCENARIO_WORKERS", "").strip().lower()
+    cpu = os.cpu_count() or 4
+    auto = max(1, min(8, cpu))
+    if raw in ("", "auto"):
+        return auto
+    try:
+        n = int(raw)
+    except ValueError:
+        return auto
+    if n < 1:
+        return auto
+    return min(n, 32)
+
+
+def _simulate_scenario_worker(
+    config: ProjectConfig,
+    scenario: dict[str, float | str | int | None],
+) -> dict[str, float | str | int | None]:
+    """Run one sensitivity case; module-level for pickling under ``ProcessPoolExecutor``."""
+    run_config = config.build_simulation_variant(
+        wind_multiplier=float(scenario["wind_multiplier"]),
+        solar_multiplier=float(scenario["solar_multiplier"]),
+        profile_multiplier=float(scenario["profile_multiplier"]),
+        battery_capacity_kwh=float(scenario["capacity_kwh"]),
+        battery_duration_hours=float(scenario["duration_hours"]),
+    )
+    result = simulate_system(run_config)
+    return {
+        "case_id": str(scenario["case_id"]),
+        "case_group": str(scenario["case_group"]),
+        "wind_multiplier": float(scenario["wind_multiplier"]),
+        "solar_multiplier": float(scenario["solar_multiplier"]),
+        "profile_multiplier": float(scenario["profile_multiplier"]),
+        "battery_capacity_kwh": float(scenario["capacity_kwh"]),
+        "battery_duration_hours": float(scenario["duration_hours"]),
+        "battery_power_kw": run_config.battery.nominal_power_kw,
+        **dict(result.summary_metrics),
+    }
 
 
 def build_case_rows(
@@ -134,33 +184,50 @@ def _run_scenarios(
     *,
     progress_callback: ScenarioProgressCallback | None = None,
 ) -> list[dict[str, float | str | int | None]]:
+    total = len(scenarios)
+    workers = _resolve_scenario_workers()
+    if workers <= 1 or total <= 1:
+        return _run_scenarios_sequential(config, scenarios, progress_callback=progress_callback)
+
+    if progress_callback:
+        progress_callback(0, total, str(scenarios[0]["case_id"]))
+
+    rows: list[dict[str, float | str | int | None] | None] = [None] * total
+    executor = ProcessPoolExecutor(max_workers=workers)
+    abnormal = True
+    try:
+        future_to_index = {
+            executor.submit(_simulate_scenario_worker, config, scenario): index
+            for index, scenario in enumerate(scenarios)
+        }
+        completed = 0
+        for future in as_completed(future_to_index):
+            index = future_to_index[future]
+            rows[index] = future.result()
+            completed += 1
+            if progress_callback:
+                progress_callback(completed, total, str(scenarios[index]["case_id"]))
+        abnormal = False
+    finally:
+        executor.shutdown(wait=not abnormal, cancel_futures=abnormal)
+
+    assert all(row is not None for row in rows)
+    return cast(list[dict[str, float | str | int | None]], rows)
+
+
+def _run_scenarios_sequential(
+    config: ProjectConfig,
+    scenarios: list[dict[str, float | str | int | None]],
+    *,
+    progress_callback: ScenarioProgressCallback | None = None,
+) -> list[dict[str, float | str | int | None]]:
     rows: list[dict[str, float | str | int | None]] = []
     total = len(scenarios)
     for index, scenario in enumerate(scenarios, start=1):
         if progress_callback:
             progress_callback(index - 1, total, str(scenario["case_id"]))
 
-        run_config = config.build_simulation_variant(
-            wind_multiplier=float(scenario["wind_multiplier"]),
-            solar_multiplier=float(scenario["solar_multiplier"]),
-            profile_multiplier=float(scenario["profile_multiplier"]),
-            battery_capacity_kwh=float(scenario["capacity_kwh"]),
-            battery_duration_hours=float(scenario["duration_hours"]),
-        )
-        result = simulate_system(run_config)
-        rows.append(
-            {
-                "case_id": str(scenario["case_id"]),
-                "case_group": str(scenario["case_group"]),
-                "wind_multiplier": float(scenario["wind_multiplier"]),
-                "solar_multiplier": float(scenario["solar_multiplier"]),
-                "profile_multiplier": float(scenario["profile_multiplier"]),
-                "battery_capacity_kwh": float(scenario["capacity_kwh"]),
-                "battery_duration_hours": float(scenario["duration_hours"]),
-                "battery_power_kw": run_config.battery.nominal_power_kw,
-                **dict(result.summary_metrics),
-            }
-        )
+        rows.append(_simulate_scenario_worker(config, scenario))
 
         if progress_callback:
             progress_callback(index, total, str(scenario["case_id"]))

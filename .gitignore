@@ -146,7 +146,11 @@ venv.bak/
 
 # Local generated study outputs
 output/
+output_ideal/
 .workspace/
+
+# Full-year tiled profiles (see data/ideal/README.md)
+data/ideal/generated_*.csv
 
 # Spyder project settings
 .spyderproject

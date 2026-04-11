@@ -308,6 +308,12 @@ def _simulate_section_accounting(
 
     nominal_capacity_kw_min = float(config.capacity_kwh) * 60.0
     nominal_capacity_kwh = float(config.capacity_kwh)
+    max_discharge_kw = float(config.max_discharge_kw) if config.max_discharge_kw > 0 else float(config.nominal_power_kw)
+    max_charge_kw = float(config.max_charge_kw) if config.max_charge_kw > 0 else float(config.nominal_power_kw)
+    if max_discharge_kw <= 0:
+        max_discharge_kw = float(config.nominal_power_kw)
+    if max_charge_kw <= 0:
+        max_charge_kw = float(config.nominal_power_kw)
     prior_closing_kw_min = max(config.initial_soc_fraction, 0.0) * nominal_capacity_kw_min
     cumulative_drawn_kw_min = 0.0
     cumulative_stored_kw_min = 0.0
@@ -331,11 +337,11 @@ def _simulate_section_accounting(
         excess_power_kw[index] = excess
         deficit_power_kw[index] = deficit
 
-        # available power (kW) we can practically draw based on stored minimum energy
-        available_discharge_kw = battery_opening_kw_min[index]
-
-        # discharge capped by state of charge
-        required_draw = min(available_discharge_kw, deficit)
+        # Per-minute timestep: stored energy (kW-min) caps average discharge power (kW) at the same numeric value.
+        # Also cap by inverter / PCS limit (kW).
+        soc_discharge_budget_kw = battery_opening_kw_min[index]
+        discharge_power_cap_kw = min(soc_discharge_budget_kw, max_discharge_kw)
+        required_draw = min(discharge_power_cap_kw, deficit)
         battery_draw_required_kw[index] = required_draw
 
         # calculate loss on the drawn amount
@@ -343,16 +349,13 @@ def _simulate_section_accounting(
         battery_draw_loss_rate[index] = _lookup_loss_rate(battery_draw_c_rate[index], config.discharge_loss_table)
         battery_draw_loss_kw[index] = battery_draw_loss_rate[index] * required_draw
 
-        # total drawn from battery is required + loss, capped by what's actually there
+        # total drawn from battery is required + loss, capped by stored energy (kW-min budget for this minute).
         draw_total = required_draw + battery_draw_loss_kw[index]
-        if draw_total > available_discharge_kw:
-            # Cap to available: we can only extract total battery energy.
-            # Actually, to be perfectly physically consistent: we can only extract total battery energy.
-            # Thus battery_draw_final_kw is minimum of required+loss vs available
-            battery_draw_final_kw[index] = available_discharge_kw
-            # which means required draw actually satisfied is available - loss roughly.
-            # We'll just cap it simply:
-            battery_draw_loss_kw[index] = battery_draw_loss_rate[index] * (available_discharge_kw / (1 + battery_draw_loss_rate[index]))
+        if draw_total > soc_discharge_budget_kw:
+            battery_draw_final_kw[index] = soc_discharge_budget_kw
+            battery_draw_loss_kw[index] = battery_draw_loss_rate[index] * (
+                soc_discharge_budget_kw / (1 + battery_draw_loss_rate[index])
+            )
             battery_draw_required_kw[index] = battery_draw_final_kw[index] - battery_draw_loss_kw[index]
         else:
             battery_draw_final_kw[index] = draw_total
@@ -363,8 +366,8 @@ def _simulate_section_accounting(
         remaining_headroom_kw = max(capacity_now_kw_min[index] - battery_opening_kw_min[index], 0.0)
         store_available = 0.0
         if excess > 0.0 and remaining_headroom_kw > 0.0:
-            # charge strictly proportional to remaining headroom
-            store_available = min(excess, remaining_headroom_kw)
+            # Charge power (kW) limited by surplus, headroom (kW-min → kW for 1 min), and PCS charge limit.
+            store_available = min(excess, remaining_headroom_kw, max_charge_kw)
 
         battery_store_available_kw[index] = store_available
         battery_store_c_rate[index] = _rounded_c_rate(store_available, nominal_capacity_kwh)
