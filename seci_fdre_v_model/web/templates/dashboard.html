@@ -116,6 +116,39 @@
         </div>
       </article>
 
+      {% if sensitivity_case_groups %}
+        <form method="get" class="panel case-picker-panel">
+          <div class="panel-header panel-header-stack">
+            <div>
+              <p class="eyebrow">Sensitivity</p>
+              <h3>Case for summary metrics</h3>
+              <p class="section-note">
+                Top cards use the selected row from <code>cases_table.csv</code> / <code>sensitivity_cross_table.csv</code>.
+                Minute charts and the energy table below still use the <strong>base</strong> run only (single saved simulation trace).
+              </p>
+            </div>
+            <label class="inline-field case-picker-label">
+              <span>Combination</span>
+              <select name="case_id" data-case-picker onchange="this.form.submit()">
+                <option value="base" {% if selected_case_id == 'base' %}selected{% endif %}>base — reference configuration</option>
+                {% for grp in sensitivity_case_groups %}
+                  <optgroup label="{{ grp.group }}">
+                    {% for opt in grp.options %}
+                      <option value="{{ opt.value }}" {% if selected_case_id == opt.value %}selected{% endif %}>{{ opt.label }}</option>
+                    {% endfor %}
+                  </optgroup>
+                {% endfor %}
+              </select>
+            </label>
+          </div>
+          {% if preview_artifact %}<input type="hidden" name="artifact" value="{{ preview_artifact }}">{% endif %}
+          {% if selected_chart_dataset %}<input type="hidden" name="chart_dataset" value="{{ selected_chart_dataset }}">{% endif %}
+          {% if request.args.get('page') %}<input type="hidden" name="page" value="{{ request.args.get('page') }}">{% endif %}
+          {% if request.args.get('page_size') %}<input type="hidden" name="page_size" value="{{ request.args.get('page_size') }}">{% endif %}
+          <noscript><button type="submit" class="button">Apply case</button></noscript>
+        </form>
+      {% endif %}
+
       <section class="metric-grid">
         {% for metric in metric_cards %}
           <article class="metric-card">
@@ -132,6 +165,9 @@
             <h3>Energy Table</h3>
             <span class="panel-note">Annual SOURCES / USES / LOSS</span>
           </div>
+          {% if selected_case_id != 'base' %}
+            <p class="section-note">Energy table is from the <strong>base</strong> minute simulation only, not recomputed for case <code>{{ selected_case_id }}</code>.</p>
+          {% endif %}
           {% if selected_run and selected_run.summary_metrics.get('solar_nonzero_fraction_pct', 100) < 5 %}
             <p class="section-note">
               Solar and wind totals sum only minutes where aligned <code>solar_kw</code> / <code>wind_kw</code> are non-zero
@@ -206,6 +242,9 @@
           <div>
             <h3>Charts</h3>
             <p class="section-note">Switch between curated chart datasets without reloading the page. Click a chart to open a large view.</p>
+            {% if selected_case_id != 'base' %}
+              <p class="section-note">Charts use <code>base_case_minute_flows.parquet</code> (base simulation), not the selected sensitivity case.</p>
+            {% endif %}
           </div>
           <div class="tab-row">
             {% for option in chart_options %}

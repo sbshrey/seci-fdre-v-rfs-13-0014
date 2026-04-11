@@ -52,6 +52,8 @@ from seci_fdre_v_model.web.services import (
     project_config_for_study_profile_preview,
     load_energy_table,
     load_metric_cards,
+    load_sensitivity_case_option_groups,
+    resolve_dashboard_case_metrics,
     load_project_config,
     load_small_table,
     load_table_preview,
@@ -603,6 +605,8 @@ def create_app(
                 active_page="dashboard",
                 run_records=run_records,
                 selected_run=None,
+                sensitivity_case_groups=[],
+                selected_case_id="base",
                 metric_cards=[],
                 energy_table=[],
                 compliance_rows=[],
@@ -633,12 +637,19 @@ def create_app(
             lambda: build_dataset_chart_cards(record, selected_chart_dataset),
             default=[],
         ) if selected_chart_dataset else []
+        sensitivity_case_groups = _safe_call(lambda: load_sensitivity_case_option_groups(record), default=[])
+        case_metrics, selected_case_id = resolve_dashboard_case_metrics(
+            record,
+            request.args.get("case_id"),
+        )
         return render_template(
             "dashboard.html",
             active_page="dashboard",
             run_records=run_records,
             selected_run=record,
-            metric_cards=_safe_call(lambda: load_metric_cards(record), default=[]),
+            sensitivity_case_groups=sensitivity_case_groups,
+            selected_case_id=selected_case_id,
+            metric_cards=_safe_call(lambda: load_metric_cards(case_metrics), default=[]),
             energy_table=_safe_call(lambda: load_energy_table(record), default=[]),
             compliance_rows=_safe_call(
                 lambda: load_small_table(record, "base_case_profile_compliance_monthly.csv", limit=12),

@@ -6,6 +6,7 @@ import json
 import time
 from pathlib import Path
 
+import polars as pl
 import yaml
 
 from seci_fdre_v_model.web.app import create_app
@@ -145,6 +146,16 @@ def test_web_control_room_flow(tmp_path: Path) -> None:
     assert dashboard_response.status_code == 200
     assert run_id.encode("utf-8") in dashboard_response.data
     assert b"Energy Table" in dashboard_response.data
+    assert b"Case for summary metrics" in dashboard_response.data
+
+    cases_df = pl.read_csv(workspace_root / "runs" / run_id / "package" / "cases_table.csv")
+    alt = cases_df.filter(pl.col("case_id") != "base").head(1)
+    assert alt.height == 1
+    alt_id = str(alt["case_id"][0])
+    dash_alt = client.get(f"/runs/{run_id}?case_id={alt_id}")
+    assert dash_alt.status_code == 200
+    assert alt_id.encode("utf-8") in dash_alt.data
+    assert b'selected="selected"' in dash_alt.data or b"selected" in dash_alt.data
 
     chart_response = client.get(f"/api/charts/{run_id}/base_case_minute_flows.parquet")
     assert chart_response.status_code == 200

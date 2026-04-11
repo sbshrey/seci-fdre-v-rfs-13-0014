@@ -241,6 +241,19 @@ a {
   border: 1px solid var(--line);
 }
 
+.case-picker-panel {
+  margin-bottom: 1rem;
+}
+
+.case-picker-label select {
+  min-width: min(36rem, 100%);
+  padding: 0.4rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  font-weight: 500;
+  background: var(--surface);
+}
+
 .aligned-report-pre {
   margin: 0.75rem 0 0;
   padding: 0.85rem 1rem;

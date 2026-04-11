@@ -793,8 +793,68 @@ def default_preview_artifact(record: RunRecord) -> str | None:
     return tabular[0] if tabular else None
 
 
-def load_metric_cards(record: RunRecord) -> list[MetricCard]:
-    row = record.summary_metrics
+def _format_sensitivity_case_label(row: dict[str, Any]) -> str:
+    cid = str(row.get("case_id", "?"))
+    if cid == "base":
+        return "base — reference configuration"
+    w = row.get("wind_multiplier")
+    s = row.get("solar_multiplier")
+    p = row.get("profile_multiplier")
+    c = row.get("battery_capacity_kwh")
+    h = row.get("battery_duration_hours")
+    return f"{cid} — W×{w} S×{s} P×{p} | BESS {c} kWh / {h} h"
+
+
+def load_sensitivity_case_option_groups(record: RunRecord) -> list[dict[str, Any]]:
+    """Grouped options for the dashboard case picker (named cases, then factorial cross table)."""
+    seen: set[str] = set()
+    groups: list[dict[str, Any]] = []
+
+    def consume(rows: list[dict[str, Any]], group_name: str) -> None:
+        opts: list[dict[str, str]] = []
+        for raw in rows:
+            cid = str(raw.get("case_id", "")).strip()
+            if not cid or cid == "base" or cid in seen:
+                continue
+            seen.add(cid)
+            opts.append({"value": cid, "label": _format_sensitivity_case_label(raw)})
+        if opts:
+            groups.append({"group": group_name, "options": opts})
+
+    try:
+        cases_path = resolve_run_artifact(record, "cases_table.csv")
+        consume(pl.read_csv(cases_path).to_dicts(), "Named sensitivity cases")
+    except FileNotFoundError:
+        pass
+
+    try:
+        cross_path = resolve_run_artifact(record, "sensitivity_cross_table.csv")
+        consume(pl.read_csv(cross_path).to_dicts(), "Cross product (full grid)")
+    except FileNotFoundError:
+        pass
+
+    return groups
+
+
+def resolve_dashboard_case_metrics(record: RunRecord, case_id: str | None) -> tuple[dict[str, Any], str]:
+    """Return (summary row for metric cards, canonical case_id) — unknown ids fall back to base."""
+    base = dict(record.summary_metrics or {})
+    cid = (case_id or "").strip() or "base"
+    if cid == "base":
+        return base, "base"
+    for path_name in ("cases_table.csv", "sensitivity_cross_table.csv"):
+        try:
+            path = resolve_run_artifact(record, path_name)
+            for raw in pl.read_csv(path).to_dicts():
+                if str(raw.get("case_id")) == cid:
+                    return dict(raw), cid
+        except FileNotFoundError:
+            continue
+    return base, "base"
+
+
+def load_metric_cards(summary: dict[str, Any] | None) -> list[MetricCard]:
+    row = summary or {}
     if not row:
         return []
     cards = [
