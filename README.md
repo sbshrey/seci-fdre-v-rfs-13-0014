@@ -57,6 +57,39 @@ Or with Docker Compose:
 docker compose up --build
 ```
 
+The containerized path is the simplest replacement for the Windows `.exe` if endpoint security blocks packaged binaries. It runs the same localhost browser UI and persists study files in the repo-local `.workspace/` folder mounted into the container.
+
+If port `5000` is already in use, override it when starting Compose:
+
+```bash
+SECI_FDRE_V_PORT=5050 docker compose up --build
+```
+
+Then open `http://127.0.0.1:5050`.
+
+## Podman On macOS
+
+`podman compose` on macOS still depends on an external compose provider such as `docker-compose` or `podman-compose`. If you see a "looking up compose provider failed" error, use the native Podman scripts in this repo instead:
+
+```bash
+podman machine start
+sh scripts/podman-up.sh
+```
+
+That builds the same image from `Dockerfile`, starts the web app on `http://127.0.0.1:5000`, and mounts your repo-local `.workspace/` directory into the container.
+
+To change the host port:
+
+```bash
+SECI_FDRE_V_PORT=5050 sh scripts/podman-up.sh
+```
+
+To stop and remove the container:
+
+```bash
+sh scripts/podman-down.sh
+```
+
 Windows desktop packaging is also supported for non-technical users. The packaged build launches the same localhost web UI, opens it in the default browser, and stays available through a tray icon until the user quits.
 
 The app uses `SECI_FDRE_V_WORKSPACE` when set. By default it creates a local `.workspace/` directory with:

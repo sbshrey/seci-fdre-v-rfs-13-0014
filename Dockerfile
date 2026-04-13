@@ -18,4 +18,4 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 EXPOSE 5000
 
-CMD ["seci-fdre-v-web", "--host", "0.0.0.0", "--port", "5000", "--source-config", "/app/config/project.yaml"]
+CMD ["waitress-serve", "--host=0.0.0.0", "--port=5000", "--call", "seci_fdre_v_model.web.app:create_app"]
