@@ -702,7 +702,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description="Run the SECI FDRE-V control room.")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", default=5000, type=int)
+    parser.add_argument("--port", default=8000, type=int)
     parser.add_argument("--workspace", default=None)
     parser.add_argument("--source-config", default=None)
     args = parser.parse_args(argv)

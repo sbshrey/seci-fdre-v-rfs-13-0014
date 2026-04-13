@@ -16,6 +16,6 @@ COPY main.py /app/main.py
 RUN pip install --no-cache-dir --upgrade pip \
   && pip install --no-cache-dir .
 
-EXPOSE 5000
+EXPOSE 8000
 
-CMD ["waitress-serve", "--host=0.0.0.0", "--port=5000", "--call", "seci_fdre_v_model.web.app:create_app"]
+CMD ["waitress-serve", "--host=0.0.0.0", "--port=8000", "--call", "seci_fdre_v_model.web.app:create_app"]

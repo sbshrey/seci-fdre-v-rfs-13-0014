@@ -48,7 +48,7 @@ Start it directly:
 
 ```bash
 source .venv/bin/activate
-seci-fdre-v-web --host 127.0.0.1 --port 5000
+seci-fdre-v-web --host 127.0.0.1 --port 8000
 ```
 
 Or with Docker Compose:
@@ -59,13 +59,13 @@ docker compose up --build
 
 The containerized path is the simplest replacement for the Windows `.exe` if endpoint security blocks packaged binaries. It runs the same localhost browser UI and persists study files in the repo-local `.workspace/` folder mounted into the container.
 
-If port `5000` is already in use, override it when starting Compose:
+If port `8000` is already in use, override it when starting Compose:
 
 ```bash
-SECI_FDRE_V_PORT=5050 docker compose up --build
+SECI_FDRE_V_PORT=8050 docker compose up --build
 ```
 
-Then open `http://127.0.0.1:5050`.
+Then open `http://127.0.0.1:8050`.
 
 ## Podman On macOS
 
@@ -76,12 +76,12 @@ podman machine start
 sh scripts/podman-up.sh
 ```
 
-That builds the same image from `Dockerfile`, starts the web app on `http://127.0.0.1:5000`, and mounts your repo-local `.workspace/` directory into the container.
+That builds the same image from `Dockerfile`, starts the web app on `http://127.0.0.1:8000`, and mounts your repo-local `.workspace/` directory into the container.
 
 To change the host port:
 
 ```bash
-SECI_FDRE_V_PORT=5050 sh scripts/podman-up.sh
+SECI_FDRE_V_PORT=8050 sh scripts/podman-up.sh
 ```
 
 To stop and remove the container:
