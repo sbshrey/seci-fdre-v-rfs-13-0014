@@ -42,7 +42,7 @@ def run_full_study(
         if progress_callback is not None:
             progress_callback(stage, round(pct, 1), detail)
 
-    emit("Generate inputs", 0, "Generating tender-derived profile and aux files")
+    emit("Generate inputs", 0, "Generating tender-derived profile inputs")
     generate_tender_input_files(config)
 
     target_dir = _resolve_package_dir(config, package_dir)
@@ -56,7 +56,7 @@ def run_full_study(
     )
 
     emit("Writing outputs", 30, "Writing base case outputs")
-    write_simulation_outputs(base_result, target_dir, "base_case")
+    write_simulation_outputs(base_result, config.simulation, target_dir, "base_case")
     pl.DataFrame(compute_energy_table(base_result.minute_flows)).write_csv(target_dir / "energy_table.csv")
 
     if dump_sections:
@@ -127,10 +127,15 @@ def _scenario_progress(
 
 
 def _build_profile_index(config: ProjectConfig) -> pl.DataFrame:
+    aux_path = (
+        "derived at runtime (battery_state aux mode)"
+        if config.simulation.load.uses_battery_state_aux
+        else str(config.inputs.aux_power_path)
+    )
     return pl.DataFrame(
         [
             {"profile_name": "Output Profile", "path": str(config.inputs.output_profile_path)},
             {"profile_name": "Output Profile 18-22", "path": str(config.inputs.output_profile_18_22_path)},
-            {"profile_name": "Aux Power", "path": str(config.inputs.aux_power_path)},
+            {"profile_name": "Aux Power", "path": aux_path},
         ]
     )

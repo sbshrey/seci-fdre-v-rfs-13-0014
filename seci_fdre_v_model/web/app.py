@@ -80,6 +80,10 @@ CONFIG_SELECT_OPTIONS = {
         ("template", "Template"),
         ("flat", "Flat"),
     ],
+    "simulation.load.aux_mode": [
+        ("battery_state", "Battery State"),
+        ("static_csv", "Static CSV"),
+    ],
     "simulation.load.profile_template_id": [
         (template_id, template.source_doc)
         for template_id, template in SUPPORTED_TENDER_PROFILES.items()
@@ -370,6 +374,7 @@ def create_app(
             "inputs.html",
             active_page="inputs",
             managed_inputs=list_managed_inputs(state),
+            project=load_project_config(state),
         )
 
     @app.post("/inputs/upload/<input_key>")

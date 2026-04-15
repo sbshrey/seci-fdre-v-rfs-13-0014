@@ -9,7 +9,6 @@ inputs:
   wind_path: ../data/Wind_2025_01-01_data_.csv
   output_profile_path: ../data/seci_fdre_v_amendment_03_output_profile.csv
   output_profile_18_22_path: ../data/seci_fdre_v_amendment_03_output_profile_18_22.csv
-  aux_power_path: ../data/aux_power_profile.csv
 
 simulation:
   data:
@@ -28,7 +27,10 @@ simulation:
     profile_mode: template
     profile_template_id: seci_fdre_v_amendment_03
     contracted_capacity_mw: 1.0
-    aux_consumption_kw: 20.0
+    aux_mode: battery_state
+    aux_charge_fraction: 0.03
+    aux_discharge_fraction: 0.025
+    aux_idle_fraction: 0.015
   battery:
     nominal_power_kw: 500.0
     duration_hours: 2.0

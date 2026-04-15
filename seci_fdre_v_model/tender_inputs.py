@@ -21,7 +21,11 @@ def generate_tender_input_files(config: ProjectConfig) -> list[Path]:
             )
         }
     )
-    load_frame = build_load_profile_frame(timeline["timestamp"], config.simulation.load)
+    load_frame = build_load_profile_frame(
+        timeline["timestamp"],
+        config.simulation.load,
+        battery_nominal_power_kw=config.simulation.battery.nominal_power_kw,
+    )
     output_df = timeline.with_columns(pl.Series("output_profile_kw", load_frame["output_profile_kw"]))
     aux_df = timeline.with_columns(pl.Series("aux_power_kw", load_frame["aux_consumption_kw"]))
     evening_df = output_df.with_columns(
@@ -32,9 +36,14 @@ def generate_tender_input_files(config: ProjectConfig) -> list[Path]:
     ).select("timestamp", "output_profile_18_22_kw")
 
     _write_csv(output_df, config.inputs.output_profile_path)
-    _write_csv(aux_df, config.inputs.aux_power_path)
     _write_csv(evening_df, config.inputs.output_profile_18_22_path)
-    return [config.inputs.output_profile_path, config.inputs.output_profile_18_22_path, config.inputs.aux_power_path]
+    written = [config.inputs.output_profile_path, config.inputs.output_profile_18_22_path]
+    if config.simulation.load.uses_static_aux:
+        if config.inputs.aux_power_path is None:
+            raise ValueError("inputs.aux_power_path is required in static_csv aux mode.")
+        _write_csv(aux_df, config.inputs.aux_power_path)
+        written.append(config.inputs.aux_power_path)
+    return written
 
 
 def _write_csv(frame: pl.DataFrame, path: Path) -> None:

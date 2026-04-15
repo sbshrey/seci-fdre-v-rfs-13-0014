@@ -137,3 +137,74 @@ sensitivity:
     assert summary.minutes > 2000
     assert summary.solar_kwh > 0
     assert summary.consumption_kwh > 0
+
+
+def test_summarize_aligned_inputs_dynamic_aux_marks_idle_approximation(tmp_path: Path) -> None:
+    repo = Path(__file__).resolve().parents[1]
+    solar_seed = repo / "data" / "Solar_2025-01-01_data_.csv"
+    wind_seed = repo / "data" / "Wind_2025_01-01_data_.csv"
+    solar_out = tmp_path / "solar_year.csv"
+    wind_out = tmp_path / "wind_year.csv"
+    write_tiled_year_profiles(
+        simulation_start=datetime(2025, 1, 1, 0, 0),
+        simulation_end=datetime(2025, 1, 1, 23, 59),
+        solar_source=solar_seed,
+        wind_source=wind_seed,
+        solar_out=solar_out,
+        wind_out=wind_out,
+    )
+
+    yaml_text = f"""
+project:
+  plant_name: test_dynamic_aux
+  output_dir: output
+  simulation_start: "2025-01-01 00:00"
+  simulation_end: "2025-01-01 23:59"
+
+inputs:
+  solar_path: {solar_out.as_posix()}
+  wind_path: {wind_out.as_posix()}
+  output_profile_path: {(repo / "data" / "seci_fdre_v_amendment_03_output_profile.csv").as_posix()}
+  output_profile_18_22_path: {(repo / "data" / "seci_fdre_v_amendment_03_output_profile_18_22.csv").as_posix()}
+
+simulation:
+  data:
+    solar_enabled: true
+    wind_enabled: true
+  preprocessing:
+    frequency: 1m
+    gap_fill: zero
+    max_interpolation_gap_minutes: 15
+    align_to_full_year: false
+    simulation_dtype: float64
+  grid:
+    export_limit_kw: 1000.0
+    import_limit_kw: null
+  load:
+    profile_mode: template
+    profile_template_id: seci_fdre_v_amendment_03
+    contracted_capacity_mw: 1.0
+    aux_mode: battery_state
+    aux_charge_fraction: 0.03
+    aux_discharge_fraction: 0.025
+    aux_idle_fraction: 0.015
+  battery:
+    nominal_power_kw: 500.0
+    duration_hours: 2.0
+    initial_soc_fraction: 0.5
+
+sensitivity:
+  wind_multipliers: [1.0]
+  solar_multipliers: [1.0]
+  profile_multipliers: [1.0]
+  battery_capacity_kwh_values: [1000.0]
+  battery_duration_hour_values: [2.0]
+"""
+    cfg_path = tmp_path / "project_dynamic.yaml"
+    cfg_path.write_text(yaml_text, encoding="utf-8")
+
+    project = ProjectConfig.from_yaml(cfg_path)
+    summary = summarize_aligned_inputs(project.simulation)
+
+    assert summary.aux_note == "Idle-state approximation for battery_state aux mode."
+    assert summary.aux_kwh > 0

@@ -288,6 +288,31 @@ function syncProfileModeFields(mode) {
   });
 }
 
+function syncAuxModeFields(mode) {
+  const staticOnlyFields = document.querySelectorAll("[data-aux-static-only]");
+  const batteryOnlyFields = document.querySelectorAll("[data-aux-battery-only]");
+  const staticLabels = document.querySelectorAll('[data-aux-mode-field="static_only"]');
+  const batteryLabels = document.querySelectorAll('[data-aux-mode-field="battery_only"]');
+
+  const isStatic = mode === "static_csv";
+
+  staticOnlyFields.forEach((field) => {
+    field.disabled = !isStatic;
+  });
+  batteryOnlyFields.forEach((field) => {
+    field.disabled = isStatic;
+  });
+
+  staticLabels.forEach((label) => {
+    label.classList.toggle("mode-field-disabled", !isStatic);
+    label.classList.toggle("mode-field-active", isStatic);
+  });
+  batteryLabels.forEach((label) => {
+    label.classList.toggle("mode-field-disabled", isStatic);
+    label.classList.toggle("mode-field-active", !isStatic);
+  });
+}
+
 function setupProfileModeControls() {
   const modeSelect = document.querySelector("[data-profile-mode-select]");
   if (!modeSelect) return;
@@ -295,6 +320,16 @@ function setupProfileModeControls() {
   syncProfileModeFields(modeSelect.value);
   modeSelect.addEventListener("change", () => {
     syncProfileModeFields(modeSelect.value);
+  });
+}
+
+function setupAuxModeControls() {
+  const modeSelect = document.querySelector("[data-aux-mode-select]");
+  if (!modeSelect) return;
+
+  syncAuxModeFields(modeSelect.value);
+  modeSelect.addEventListener("change", () => {
+    syncAuxModeFields(modeSelect.value);
   });
 }
 
@@ -341,6 +376,10 @@ function setupConfigStudyProfileFormMirror() {
       if (modeSelect instanceof HTMLSelectElement) {
         syncProfileModeFields(modeSelect.value);
       }
+      const auxModeSelect = form.querySelector("[data-aux-mode-select]");
+      if (auxModeSelect instanceof HTMLSelectElement) {
+        syncAuxModeFields(auxModeSelect.value);
+      }
 
       const isWorkspace = data.study_profile === "workspace";
       if (saveButton instanceof HTMLButtonElement) {
@@ -382,6 +421,7 @@ function setupConfigStudyProfileFormMirror() {
 async function bootUi() {
   await setupConfigStudyProfileFormMirror();
   setupProfileModeControls();
+  setupAuxModeControls();
   setupAlignedEnergyReport();
   if (serverHintsAtVisibleJob()) {
     pollJobStatus();
@@ -476,6 +516,9 @@ function setupAlignedEnergyReport() {
         `  Implied wind mult:  ${Number(g.implied_next_wind_multiplier).toPrecision(5)}`,
         `  Implied profile mult: ${Number(g.implied_next_profile_multiplier).toPrecision(5)}`,
       ];
+      if (s.aux_note) {
+        lines.splice(10, 0, `  Aux basis:          ${String(s.aux_note)}`);
+      }
       if (g.notes) {
         lines.push("", String(g.notes));
       }

@@ -61,7 +61,12 @@ def get_tender_profile(template_id: str) -> TenderProfileTemplate:
         raise ValueError(f"Unsupported tender profile '{template_id}'. Expected one of: {supported}.") from exc
 
 
-def build_load_profile_frame(timestamps: pl.Series, load_config: LoadConfig) -> pl.DataFrame:
+def build_load_profile_frame(
+    timestamps: pl.Series,
+    load_config: LoadConfig,
+    *,
+    battery_nominal_power_kw: float | None = None,
+) -> pl.DataFrame:
     """Build minute-level output/aux/total consumption columns for flat or tender template mode."""
     if timestamps.dtype != pl.Datetime:
         timestamps = timestamps.cast(pl.Datetime)
@@ -72,7 +77,14 @@ def build_load_profile_frame(timestamps: pl.Series, load_config: LoadConfig) -> 
         output_kw = float(load_config.output_profile_kw or 0.0)
         output_profile = np.full(len(timestamps), output_kw, dtype=np.float64)
 
-    aux_consumption = np.full(len(timestamps), float(load_config.aux_consumption_kw), dtype=np.float64)
+    if load_config.uses_battery_state_aux:
+        if battery_nominal_power_kw is None:
+            raise ValueError("battery_nominal_power_kw is required for battery_state aux mode.")
+        aux_kw = float(battery_nominal_power_kw) * float(load_config.aux_idle_fraction or 0.0)
+    else:
+        aux_kw = float(load_config.aux_consumption_kw)
+
+    aux_consumption = np.full(len(timestamps), aux_kw, dtype=np.float64)
     total_consumption = output_profile + aux_consumption
     return pl.DataFrame(
         {

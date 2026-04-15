@@ -7,8 +7,10 @@ Local SECI FDRE-V study runner with both a CLI workflow and a Docker Compose con
 - generates separate tender-derived files for:
   - output profile
   - output profile for `18:00-22:00`
-  - aux power
-- runs a minute-level BESS simulation from solar, wind, output-profile, and aux-power files
+  - aux power in legacy `static_csv` mode
+- runs a minute-level BESS simulation from solar, wind, and output-profile files, with aux power supplied either by:
+  - a legacy aux-power CSV, or
+  - dynamic battery-state aux fractions
 - creates:
   - base summary
   - energy table
@@ -98,7 +100,7 @@ The app uses `SECI_FDRE_V_WORKSPACE` when set. By default it creates a local `.w
 - `inputs/`
 - `runs/<run_id>/`
 
-On the **Inputs** page, the **Ideal 1 MW workflow** panel mirrors the CLI ideal flow: apply the bundled `config/project.ideal_1mw.yaml` preset, tile `solar.csv` / `wind.csv` across the study horizon, regenerate tender profiles, and fetch a **pre-BESS alignment report** via `/api/aligned-energy-report`.
+On the **Inputs** page, the **Ideal 1 MW workflow** panel mirrors the CLI ideal flow: apply the bundled `config/project.ideal_1mw.yaml` preset, tile `solar.csv` / `wind.csv` across the study horizon, regenerate tender profiles, and fetch a **pre-BESS alignment report** via `/api/aligned-energy-report`. In `battery_state` aux mode, the report labels aux as an idle-state approximation because dispatch-resolved aux is only known during the simulation itself.
 
 On **Run study**, the **Study config** dropdown chooses whether the run snapshot uses your workspace `project.yaml` or the bundled **Ideal 1 MW example** parameters (workspace CSV inputs either way); the choice is remembered for your browser session. On the **Config** page, changing that dropdown refreshes the form to match the selected profile (Save is disabled while previewing Ideal so you do not overwrite your workspace YAML by mistake).
 
@@ -115,7 +117,7 @@ The starter config is `config/project.yaml`.
 Key sections:
 
 - `project`: plant name, output dir, simulation window
-- `inputs`: solar, wind, output profile, evening profile, aux power file paths
+- `inputs`: solar, wind, output profile, evening profile, and optional aux power file paths
 - `simulation`: data toggles, grid, load, battery
 - `sensitivity`: wind, solar, profile, battery capacity, battery hours
 
@@ -131,6 +133,7 @@ Each run writes to `output/<plant_name>/`:
 - `cases_table.csv`
 - `sensitivity_cross_table.csv`
 - `profile_files_index.csv`
+- `resolved_aux_power.csv` (battery-state aux mode)
 - `<plant_name>.xlsx`
 
 The control-room workflow writes immutable run packages to `.workspace/runs/<run_id>/package/` instead of overwriting prior runs.

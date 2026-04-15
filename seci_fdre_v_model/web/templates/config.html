@@ -146,9 +146,61 @@
           data-flat-only
           {% if project.simulation.load.profile_mode != 'flat' %}disabled{% endif %}>
       </label>
-      <label>
+      <label data-aux-mode-field="aux_mode">
+        <span>Aux Mode</span>
+        <select name="simulation.load.aux_mode" data-aux-mode-select>
+          {% for value, label in select_options["simulation.load.aux_mode"] %}
+            <option value="{{ value }}" {% if project.simulation.load.aux_mode == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label
+        data-aux-mode-field="static_only"
+        class="{% if project.simulation.load.aux_mode == 'static_csv' %}mode-field-active{% else %}mode-field-disabled{% endif %}">
         <span>Aux Consumption (kW)</span>
-        <input type="number" step="any" name="simulation.load.aux_consumption_kw" value="{{ project.simulation.load.aux_consumption_kw }}">
+        <input
+          type="number"
+          step="any"
+          name="simulation.load.aux_consumption_kw"
+          value="{{ project.simulation.load.aux_consumption_kw }}"
+          data-aux-static-only
+          {% if project.simulation.load.aux_mode != 'static_csv' %}disabled{% endif %}>
+      </label>
+      <label
+        data-aux-mode-field="battery_only"
+        class="{% if project.simulation.load.aux_mode == 'battery_state' %}mode-field-active{% else %}mode-field-disabled{% endif %}">
+        <span>Aux Charge Fraction</span>
+        <input
+          type="number"
+          step="any"
+          name="simulation.load.aux_charge_fraction"
+          value="{{ '' if project.simulation.load.aux_charge_fraction is none else project.simulation.load.aux_charge_fraction }}"
+          data-aux-battery-only
+          {% if project.simulation.load.aux_mode != 'battery_state' %}disabled{% endif %}>
+      </label>
+      <label
+        data-aux-mode-field="battery_only"
+        class="{% if project.simulation.load.aux_mode == 'battery_state' %}mode-field-active{% else %}mode-field-disabled{% endif %}">
+        <span>Aux Discharge Fraction</span>
+        <input
+          type="number"
+          step="any"
+          name="simulation.load.aux_discharge_fraction"
+          value="{{ '' if project.simulation.load.aux_discharge_fraction is none else project.simulation.load.aux_discharge_fraction }}"
+          data-aux-battery-only
+          {% if project.simulation.load.aux_mode != 'battery_state' %}disabled{% endif %}>
+      </label>
+      <label
+        data-aux-mode-field="battery_only"
+        class="{% if project.simulation.load.aux_mode == 'battery_state' %}mode-field-active{% else %}mode-field-disabled{% endif %}">
+        <span>Aux Idle Fraction</span>
+        <input
+          type="number"
+          step="any"
+          name="simulation.load.aux_idle_fraction"
+          value="{{ '' if project.simulation.load.aux_idle_fraction is none else project.simulation.load.aux_idle_fraction }}"
+          data-aux-battery-only
+          {% if project.simulation.load.aux_mode != 'battery_state' %}disabled{% endif %}>
       </label>
     </div>
   </section>

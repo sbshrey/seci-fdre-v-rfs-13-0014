@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import polars as pl
 
@@ -24,6 +24,7 @@ class AlignedEnergySummary:
     net_generation_minus_load_kwh: float
     surplus_minutes: int
     deficit_minutes: int
+    aux_note: str | None = None
 
 
 def kw_min_sum_to_kwh(value_kw_min: float) -> float:
@@ -84,7 +85,10 @@ def summarize_aligned_frame(df: pl.DataFrame) -> AlignedEnergySummary:
 def summarize_aligned_inputs(config: SimulationConfig) -> AlignedEnergySummary:
     """Load solar/wind/profile/aux, align to the simulation grid, and summarize."""
     aligned, _context = load_aligned_inputs(config)
-    return summarize_aligned_frame(aligned)
+    summary = summarize_aligned_frame(aligned)
+    if config.load.uses_battery_state_aux:
+        return replace(summary, aux_note="Idle-state approximation for battery_state aux mode.")
+    return summary
 
 
 def format_aligned_energy_report(summary: AlignedEnergySummary, *, plant_name: str) -> str:
@@ -100,11 +104,17 @@ def format_aligned_energy_report(summary: AlignedEnergySummary, *, plant_name: s
         f"  Aux:                {summary.aux_kwh:,.0f} kWh",
         f"  Total consumption:  {summary.consumption_kwh:,.0f} kWh",
         f"  Net (gen - load):   {summary.net_generation_minus_load_kwh:,.0f} kWh",
-        "",
-        "Minute balance (before battery):",
-        f"  Minutes with surplus (gen > load): {summary.surplus_minutes:,}",
-        f"  Minutes with deficit (gen < load): {summary.deficit_minutes:,}",
     ]
+    if summary.aux_note:
+        lines.append(f"  Aux basis:          {summary.aux_note}")
+    lines.extend(
+        [
+            "",
+            "Minute balance (before battery):",
+            f"  Minutes with surplus (gen > load): {summary.surplus_minutes:,}",
+            f"  Minutes with deficit (gen < load): {summary.deficit_minutes:,}",
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 

@@ -94,6 +94,9 @@ def test_web_control_room_flow(tmp_path: Path) -> None:
     assert b'<select name="simulation.preprocessing.simulation_dtype">' in config_response.data
     assert b'name="simulation.load.profile_mode"' in config_response.data
     assert b'data-profile-mode-select' in config_response.data
+    assert b'data-aux-mode-select' in config_response.data
+    assert b'data-aux-battery-only' in config_response.data
+    assert b'data-aux-static-only' in config_response.data
     assert b'data-template-only' in config_response.data
     assert b'data-flat-only' in config_response.data
     assert b'disabled' in config_response.data
@@ -286,7 +289,88 @@ def test_profile_mode_fields_toggle_and_save(tmp_path: Path) -> None:
     assert flat_project.simulation.load.contracted_capacity_mw == 0.1
 
 
-def _write_project_config(tmp_path: Path) -> Path:
+def test_aux_mode_fields_toggle_and_save(tmp_path: Path) -> None:
+    source_config = _write_project_config(tmp_path)
+    workspace = ensure_workspace_ready(tmp_path / ".workspace", source_config_path=source_config)
+
+    dynamic_project = save_project_form(
+        workspace,
+        {
+            "project.plant_name": "dynamic_aux_plant",
+            "project.simulation_start": "2025-01-01 00:00",
+            "project.simulation_end": "2025-01-01 00:05",
+            "simulation.data.solar_enabled": "on",
+            "simulation.data.wind_enabled": "on",
+            "simulation.preprocessing.frequency": "1m",
+            "simulation.preprocessing.gap_fill": "zero",
+            "simulation.preprocessing.max_interpolation_gap_minutes": "15",
+            "simulation.preprocessing.simulation_dtype": "float64",
+            "simulation.grid.export_limit_kw": "1000.0",
+            "simulation.grid.import_limit_kw": "",
+            "simulation.load.profile_mode": "template",
+            "simulation.load.profile_template_id": "seci_fdre_v_amendment_03",
+            "simulation.load.contracted_capacity_mw": "0.1",
+            "simulation.load.aux_mode": "battery_state",
+            "simulation.load.aux_charge_fraction": "0.03",
+            "simulation.load.aux_discharge_fraction": "0.025",
+            "simulation.load.aux_idle_fraction": "0.015",
+            "simulation.battery.nominal_power_kw": "100.0",
+            "simulation.battery.duration_hours": "1.0",
+            "simulation.battery.charge_efficiency": "1.0",
+            "simulation.battery.discharge_efficiency": "1.0",
+            "simulation.battery.degradation_per_cycle": "0.0",
+            "simulation.battery.initial_soc_fraction": "0.5",
+            "simulation.battery.min_soc_fraction": "0.0",
+            "simulation.battery.max_soc_fraction": "1.0",
+            "simulation.battery.charge_loss_table": "0.0: 0.0\n1.0: 0.0",
+            "simulation.battery.discharge_loss_table": "0.0: 0.0\n1.0: 0.0",
+            "sensitivity.wind_multipliers": "1.0, 1.1",
+            "sensitivity.solar_multipliers": "1.0, 1.1",
+            "sensitivity.profile_multipliers": "1.0, 1.1",
+            "sensitivity.battery_capacity_kwh_values": "100.0, 200.0",
+            "sensitivity.battery_duration_hour_values": "1.0, 2.0",
+        },
+    )
+
+    assert dynamic_project.simulation.load.aux_mode == "battery_state"
+    assert dynamic_project.simulation.load.aux_charge_fraction == 0.03
+    assert dynamic_project.simulation.load.aux_discharge_fraction == 0.025
+    assert dynamic_project.simulation.load.aux_idle_fraction == 0.015
+
+
+def test_dynamic_aux_inputs_page_disables_aux_csv_upload(tmp_path: Path) -> None:
+    source_config = _write_project_config(tmp_path, aux_mode="battery_state", include_aux_power_path=False)
+    workspace_root = tmp_path / ".workspace"
+    app = create_app(workspace_root=workspace_root, source_config_path=source_config)
+    client = app.test_client()
+
+    response = client.get("/inputs")
+    assert response.status_code == 200
+    assert b"Derived at run time from battery state" in response.data
+    assert b"/inputs/upload/aux_power" not in response.data
+
+    upload_response = client.post(
+        "/inputs/upload/aux_power",
+        data={"file": (io.BytesIO(b"timestamp,aux_power_kw\n2025-01-01 00:00,10\n"), "aux.csv")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert upload_response.status_code == 200
+    assert b"aux_power.csv is not used in battery_state aux mode" in upload_response.data
+
+
+def _write_project_config(
+    tmp_path: Path,
+    *,
+    profile_mode: str = "template",
+    output_profile_kw: float | None = None,
+    aux_mode: str = "static_csv",
+    include_aux_power_path: bool = True,
+    aux_consumption_kw: float = 10.0,
+    aux_charge_fraction: float = 0.03,
+    aux_discharge_fraction: float = 0.025,
+    aux_idle_fraction: float = 0.015,
+) -> Path:
     solar_path = tmp_path / "solar.csv"
     wind_path = tmp_path / "wind.csv"
     _write_csv(
@@ -314,6 +398,42 @@ def _write_project_config(tmp_path: Path) -> Path:
         ],
     )
 
+    inputs_lines = [
+        "inputs:",
+        f"  solar_path: {solar_path}",
+        f"  wind_path: {wind_path}",
+        f"  output_profile_path: {tmp_path / 'output_profile.csv'}",
+        f"  output_profile_18_22_path: {tmp_path / 'output_profile_18_22.csv'}",
+    ]
+    if include_aux_power_path:
+        inputs_lines.append(f"  aux_power_path: {tmp_path / 'aux_power.csv'}")
+
+    load_lines = [
+        "  load:",
+        f"    profile_mode: {profile_mode}",
+    ]
+    if profile_mode == "template":
+        load_lines.extend(
+            [
+                "    profile_template_id: seci_fdre_v_amendment_03",
+                "    contracted_capacity_mw: 0.1",
+            ]
+        )
+    else:
+        load_lines.append(f"    output_profile_kw: {float(output_profile_kw or 0.0)}")
+
+    if aux_mode == "battery_state":
+        load_lines.extend(
+            [
+                "    aux_mode: battery_state",
+                f"    aux_charge_fraction: {aux_charge_fraction}",
+                f"    aux_discharge_fraction: {aux_discharge_fraction}",
+                f"    aux_idle_fraction: {aux_idle_fraction}",
+            ]
+        )
+    else:
+        load_lines.append(f"    aux_consumption_kw: {aux_consumption_kw}")
+
     config_path = tmp_path / "project.yaml"
     config_path.write_text(
         "\n".join(
@@ -323,12 +443,7 @@ def _write_project_config(tmp_path: Path) -> Path:
                 f"  output_dir: {tmp_path / 'output'}",
                 '  simulation_start: "2025-01-01 00:00"',
                 '  simulation_end: "2025-01-01 00:05"',
-                "inputs:",
-                f"  solar_path: {solar_path}",
-                f"  wind_path: {wind_path}",
-                f"  output_profile_path: {tmp_path / 'output_profile.csv'}",
-                f"  output_profile_18_22_path: {tmp_path / 'output_profile_18_22.csv'}",
-                f"  aux_power_path: {tmp_path / 'aux_power.csv'}",
+                *inputs_lines,
                 "simulation:",
                 "  data:",
                 "    solar_enabled: true",
@@ -342,11 +457,7 @@ def _write_project_config(tmp_path: Path) -> Path:
                 "  grid:",
                 "    export_limit_kw: 1000.0",
                 "    import_limit_kw: null",
-                "  load:",
-                "    profile_mode: template",
-                "    profile_template_id: seci_fdre_v_amendment_03",
-                "    contracted_capacity_mw: 0.1",
-                "    aux_consumption_kw: 10.0",
+                *load_lines,
                 "  battery:",
                 "    nominal_power_kw: 100.0",
                 "    duration_hours: 1.0",
@@ -397,6 +508,20 @@ def test_api_aligned_energy_report(tmp_path: Path) -> None:
     assert "uniform_renewable_scale" in body["suggestions"]
 
 
+def test_api_aligned_energy_report_dynamic_aux_note(tmp_path: Path) -> None:
+    source_config = _write_project_config(tmp_path, aux_mode="battery_state", include_aux_power_path=False)
+    workspace_root = tmp_path / ".workspace"
+    app = create_app(workspace_root=workspace_root, source_config_path=source_config)
+    client = app.test_client()
+
+    report = client.get("/api/aligned-energy-report")
+    body = report.get_json()
+
+    assert report.status_code == 200
+    assert body["ok"] is True
+    assert "Idle-state approximation" in body["summary"]["aux_note"]
+
+
 def test_api_config_form_preview_workspace_vs_ideal(tmp_path: Path) -> None:
     source_config = _write_project_config(tmp_path)
     workspace_root = tmp_path / ".workspace"
@@ -423,6 +548,18 @@ def test_create_run_snapshot_ideal_profile_uses_bundled_plant_name(tmp_path: Pat
     assert snapshot["project"]["plant_name"] == "ideal_1mw_fdre"
     assert snapshot["inputs"]["solar_path"] == "../inputs/solar.csv"
     assert (run_dir / "inputs" / "solar.csv").exists()
+
+
+def test_create_run_snapshot_dynamic_aux_skips_aux_input_copy(tmp_path: Path) -> None:
+    source_config = _write_project_config(tmp_path, aux_mode="battery_state", include_aux_power_path=False)
+    workspace_root = tmp_path / ".workspace"
+    state = ensure_workspace_ready(workspace_root, source_config_path=source_config)
+
+    _run_id, run_dir, config_path, _package_dir = create_run_snapshot(state, study_profile="workspace")
+    snapshot = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+    assert snapshot["simulation"]["load"]["aux_mode"] == "battery_state"
+    assert not (run_dir / "inputs" / "aux_power.csv").exists()
 
 
 def test_apply_ideal_preset_and_ideal_tile_web(tmp_path: Path) -> None:

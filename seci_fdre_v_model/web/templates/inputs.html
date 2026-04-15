@@ -101,12 +101,16 @@
         <div><strong>Expected Headers</strong><span>{{ item.expected_headers | join(', ') }}</span></div>
       </div>
       <div class="action-row">
-        <form method="post" action="{{ url_for('upload_input', input_key=item.key) }}" enctype="multipart/form-data" class="upload-form">
-          <input type="file" name="file" accept=".csv,text/csv">
-          <button class="button" type="submit">Upload</button>
-        </form>
-        {% if item.exists %}
-          <a class="button button-ghost" href="{{ url_for('download_input', input_key=item.key) }}">Download</a>
+        {% if item.key == "aux_power" and project.simulation.load.aux_mode == "battery_state" %}
+          <p class="section-note">Derived at run time from battery state. Aux CSV upload/download is disabled in this mode.</p>
+        {% else %}
+          <form method="post" action="{{ url_for('upload_input', input_key=item.key) }}" enctype="multipart/form-data" class="upload-form">
+            <input type="file" name="file" accept=".csv,text/csv">
+            <button class="button" type="submit">Upload</button>
+          </form>
+          {% if item.exists %}
+            <a class="button button-ghost" href="{{ url_for('download_input', input_key=item.key) }}">Download</a>
+          {% endif %}
         {% endif %}
       </div>
     </article>

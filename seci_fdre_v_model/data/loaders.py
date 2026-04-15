@@ -57,7 +57,7 @@ def load_generation_data(config: SimulationConfig) -> tuple[pl.DataFrame, pl.Dat
     return wind.select("timestamp").with_columns(pl.lit(0.0).alias("solar_kw")), wind
 
 
-def load_consumption_data(config: SimulationConfig) -> tuple[pl.DataFrame, pl.DataFrame]:
+def load_consumption_data(config: SimulationConfig) -> tuple[pl.DataFrame, pl.DataFrame | None]:
     output_profile = _load_profile_csv(
         path=config.load.output_profile_path or "",
         value_column=PROFILE_POWER_COLUMN,
@@ -65,13 +65,15 @@ def load_consumption_data(config: SimulationConfig) -> tuple[pl.DataFrame, pl.Da
         multiplier=config.load.profile_multiplier,
         source_name="output profile",
     )
-    aux_profile = _load_profile_csv(
-        path=config.load.aux_power_path or "",
-        value_column=AUX_POWER_COLUMN,
-        target_column="aux_consumption_kw",
-        multiplier=1.0,
-        source_name="aux power",
-    )
+    aux_profile = None
+    if config.load.uses_static_aux:
+        aux_profile = _load_profile_csv(
+            path=config.load.aux_power_path or "",
+            value_column=AUX_POWER_COLUMN,
+            target_column="aux_consumption_kw",
+            multiplier=1.0,
+            source_name="aux power",
+        )
     return output_profile, aux_profile
 
 

@@ -59,14 +59,19 @@ def simulate_system(
     logger = logging.getLogger(f"seci_fdre_v_model.{config.plant_name}")
     context = SimulationContext(config=config, logger=logger, progress_callback=progress_callback)
 
-    context._progress("Loading data", 2, "Loading solar, wind, profile, and aux CSVs")
+    context._progress("Loading data", 2, "Loading solar, wind, profile, and aux inputs")
     solar, wind = load_generation_data(config)
     output_profile, aux_power = load_consumption_data(config)
     context._progress("Loading data", 8, f"Loaded {solar.height} solar, {wind.height} wind rows")
 
     context._progress("Aligning", 10, "Aligning to 1-minute grid")
     minute_data = align_generation_to_minute(solar, wind, config.preprocessing)
-    minute_data = _align_consumption_to_minute(minute_data, output_profile, aux_power)
+    minute_data = _align_consumption_to_minute(
+        minute_data,
+        output_profile,
+        aux_power,
+        default_aux_consumption_kw=_default_aux_consumption_kw(config),
+    )
     context._progress("Aligning", 12, f"Aligned {minute_data.height} minutes")
 
     gen_sum = float(minute_data.select((pl.col("solar_kw") + pl.col("wind_kw")).sum()).item())
@@ -97,7 +102,12 @@ def load_aligned_inputs(config: SimulationConfig) -> tuple[pl.DataFrame, Simulat
     solar, wind = load_generation_data(config)
     minute_data = align_generation_to_minute(solar, wind, config.preprocessing)
     output_profile, aux_power = load_consumption_data(config)
-    minute_data = _align_consumption_to_minute(minute_data, output_profile, aux_power)
+    minute_data = _align_consumption_to_minute(
+        minute_data,
+        output_profile,
+        aux_power,
+        default_aux_consumption_kw=_default_aux_consumption_kw(config),
+    )
     return minute_data, context
 
 
@@ -207,7 +217,12 @@ def compute_summary_metrics(
     return metrics
 
 
-def write_simulation_outputs(result: SimulationResult, output_dir: str | Path, stem: str) -> tuple[Path, Path]:
+def write_simulation_outputs(
+    result: SimulationResult,
+    config: SimulationConfig,
+    output_dir: str | Path,
+    stem: str,
+) -> tuple[Path, Path]:
     """Persist minute-level flows, summary metrics, and energy table."""
     target_dir = Path(output_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -220,6 +235,8 @@ def write_simulation_outputs(result: SimulationResult, output_dir: str | Path, s
     pl.DataFrame([result.summary_metrics]).write_csv(metrics_path)
     energy_rows = compute_energy_table(result.minute_flows)
     pl.DataFrame(energy_rows).write_csv(energy_table_path)
+    if config.load.uses_battery_state_aux:
+        result.minute_flows.select("timestamp", "aux_state", "aux_consumption_kw").write_csv(target_dir / "resolved_aux_power.csv")
     if result.profile_compliance_blocks is not None:
         result.profile_compliance_blocks.write_csv(compliance_blocks_path)
     elif compliance_blocks_path.exists():
@@ -288,14 +305,31 @@ def compute_energy_table(df: pl.DataFrame) -> list[dict[str, str | float]]:
     return rows
 
 
-def _align_consumption_to_minute(minute_data: pl.DataFrame, output_profile: pl.DataFrame, aux_power: pl.DataFrame) -> pl.DataFrame:
+def _align_consumption_to_minute(
+    minute_data: pl.DataFrame,
+    output_profile: pl.DataFrame,
+    aux_power: pl.DataFrame | None,
+    *,
+    default_aux_consumption_kw: float = 0.0,
+) -> pl.DataFrame:
+    aligned = minute_data.join(output_profile, on="timestamp", how="left")
+    if aux_power is not None:
+        aligned = aligned.join(aux_power, on="timestamp", how="left")
+        aligned = aligned.with_columns(pl.col("aux_consumption_kw").fill_null(default_aux_consumption_kw))
+    else:
+        aligned = aligned.with_columns(pl.lit(default_aux_consumption_kw).alias("aux_consumption_kw"))
+
     return (
-        minute_data.join(output_profile, on="timestamp", how="left")
-        .join(aux_power, on="timestamp", how="left")
-        .with_columns(pl.col("output_profile_kw").fill_null(0.0), pl.col("aux_consumption_kw").fill_null(0.0))
+        aligned.with_columns(pl.col("output_profile_kw").fill_null(0.0))
         .with_columns((pl.col("output_profile_kw") + pl.col("aux_consumption_kw")).alias("total_consumption_kw"))
     )
 
 
 def _balance_tolerance_for_dtype(dtype: str) -> float:
     return 1e-2 if dtype == "float32" else 1e-3
+
+
+def _default_aux_consumption_kw(config: SimulationConfig) -> float:
+    if config.load.uses_battery_state_aux:
+        return float(config.battery.nominal_power_kw) * float(config.load.aux_idle_fraction or 0.0)
+    return 0.0

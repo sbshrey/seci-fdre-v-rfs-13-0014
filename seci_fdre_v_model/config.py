@@ -62,7 +62,7 @@ class InputFilesConfig:
     wind_path: Path
     output_profile_path: Path
     output_profile_18_22_path: Path
-    aux_power_path: Path
+    aux_power_path: Path | None
 
 
 @dataclass(frozen=True)
@@ -94,6 +94,10 @@ class GridConfig:
 class LoadConfig:
     output_profile_kw: float | None = None
     aux_consumption_kw: float = 0.0
+    aux_mode: str = "static_csv"
+    aux_charge_fraction: float | None = None
+    aux_discharge_fraction: float | None = None
+    aux_idle_fraction: float | None = None
     profile_mode: str = "template"
     profile_template_id: str | None = None
     contracted_capacity_mw: float | None = None
@@ -104,6 +108,14 @@ class LoadConfig:
     @property
     def uses_template_profile(self) -> bool:
         return self.profile_mode == "template"
+
+    @property
+    def uses_static_aux(self) -> bool:
+        return self.aux_mode == "static_csv"
+
+    @property
+    def uses_battery_state_aux(self) -> bool:
+        return self.aux_mode == "battery_state"
 
 
 @dataclass(frozen=True)
@@ -184,6 +196,8 @@ class SimulationConfig:
             raise ValueError("max_interpolation_gap_minutes must be non-negative.")
         if self.load.profile_mode not in {"flat", "template"}:
             raise ValueError("load.profile_mode must be either 'flat' or 'template'.")
+        if self.load.aux_mode not in {"static_csv", "battery_state"}:
+            raise ValueError("load.aux_mode must be either 'static_csv' or 'battery_state'.")
         if self.load.profile_mode == "flat":
             if self.load.output_profile_path is None:
                 raise ValueError("load.output_profile_path is required in flat profile mode.")
@@ -199,8 +213,21 @@ class SimulationConfig:
                 raise ValueError("load.contracted_capacity_mw must be positive in template profile mode.")
         if self.load.output_profile_path is None:
             raise ValueError("load.output_profile_path must be set.")
-        if self.load.aux_power_path is None:
-            raise ValueError("load.aux_power_path must be set.")
+        if self.load.uses_static_aux:
+            if self.load.aux_power_path is None:
+                raise ValueError("load.aux_power_path must be set in static_csv aux mode.")
+        else:
+            required_fractions = {
+                "load.aux_charge_fraction": self.load.aux_charge_fraction,
+                "load.aux_discharge_fraction": self.load.aux_discharge_fraction,
+                "load.aux_idle_fraction": self.load.aux_idle_fraction,
+            }
+            missing = [name for name, value in required_fractions.items() if value is None]
+            if missing:
+                raise ValueError(f"Missing required battery_state aux fields: {', '.join(missing)}.")
+            negative = [name for name, value in required_fractions.items() if value is not None and value < 0]
+            if negative:
+                raise ValueError(f"Battery-state aux fractions must be non-negative: {', '.join(negative)}.")
         if self.data.solar_enabled and not Path(self.data.solar_path).exists():
             raise FileNotFoundError(f"Solar file not found: {self.data.solar_path}")
         if self.data.wind_enabled and not Path(self.data.wind_path).exists():
@@ -238,7 +265,11 @@ class ProjectConfig:
             wind_path=_resolve_path(base_dir, inputs_payload.get("wind_path", "../data/Wind_2025_01-01_data_.csv")),
             output_profile_path=_resolve_path(base_dir, inputs_payload.get("output_profile_path", "../data/seci_fdre_v_amendment_03_output_profile.csv")),
             output_profile_18_22_path=_resolve_path(base_dir, inputs_payload.get("output_profile_18_22_path", "../data/seci_fdre_v_amendment_03_output_profile_18_22.csv")),
-            aux_power_path=_resolve_path(base_dir, inputs_payload.get("aux_power_path", "../data/aux_power_profile.csv")),
+            aux_power_path=(
+                _resolve_path(base_dir, inputs_payload["aux_power_path"])
+                if inputs_payload.get("aux_power_path") not in (None, "")
+                else None
+            ),
         )
 
         simulation_payload = dict(payload.get("simulation", {}))
@@ -247,7 +278,7 @@ class ProjectConfig:
         data_payload.setdefault("wind_path", str(inputs.wind_path))
         load_payload = dict(simulation_payload.get("load", {}))
         load_payload.setdefault("output_profile_path", str(inputs.output_profile_path))
-        load_payload.setdefault("aux_power_path", str(inputs.aux_power_path))
+        load_payload.setdefault("aux_power_path", str(inputs.aux_power_path) if inputs.aux_power_path is not None else None)
 
         sim_config = SimulationConfig.from_dict(
             {
@@ -307,6 +338,10 @@ def _normalize_load_config(payload: dict[str, Any]) -> LoadConfig:
     return LoadConfig(
         output_profile_kw=float(payload["output_profile_kw"]) if payload.get("output_profile_kw") not in (None, "") else None,
         aux_consumption_kw=float(payload.get("aux_consumption_kw", 0.0)),
+        aux_mode=str(payload.get("aux_mode", "static_csv")),
+        aux_charge_fraction=float(payload["aux_charge_fraction"]) if payload.get("aux_charge_fraction") not in (None, "") else None,
+        aux_discharge_fraction=float(payload["aux_discharge_fraction"]) if payload.get("aux_discharge_fraction") not in (None, "") else None,
+        aux_idle_fraction=float(payload["aux_idle_fraction"]) if payload.get("aux_idle_fraction") not in (None, "") else None,
         profile_mode=str(payload.get("profile_mode", "template")),
         profile_template_id=str(payload["profile_template_id"]) if payload.get("profile_template_id") not in (None, "") else None,
         contracted_capacity_mw=float(payload["contracted_capacity_mw"]) if payload.get("contracted_capacity_mw") not in (None, "") else None,

@@ -9,7 +9,7 @@
 #   1) Tile seed solar/wind across the full simulation year:
 #        python main.py build-ideal-year-profiles --config config/project.yaml
 #      (writes data/ideal/generated_solar_2025.csv and generated_wind_2025.csv)
-#   2) Regenerate tender output profile + aux into data/ideal/:
+#   2) Regenerate tender output profile inputs into data/ideal/:
 #        python main.py generate-input-files --config config/project.ideal_1mw.yaml
 #   3) Check solar/wind vs load on the aligned minute table (before BESS):
 #        python main.py report-aligned-energy --config config/project.ideal_1mw.yaml
@@ -32,7 +32,6 @@ inputs:
   wind_path: ../data/ideal/generated_wind_2025.csv
   output_profile_path: ../data/ideal/output_profile.csv
   output_profile_18_22_path: ../data/ideal/output_profile_18_22.csv
-  aux_power_path: ../data/ideal/aux_power.csv
 
 simulation:
   data:
@@ -53,7 +52,10 @@ simulation:
     profile_mode: template
     profile_template_id: seci_fdre_v_amendment_03
     contracted_capacity_mw: 1.0
-    aux_consumption_kw: 20.0
+    aux_mode: battery_state
+    aux_charge_fraction: 0.03
+    aux_discharge_fraction: 0.025
+    aux_idle_fraction: 0.015
     profile_multiplier: 0.24
   battery:
     nominal_power_kw: 1000.0

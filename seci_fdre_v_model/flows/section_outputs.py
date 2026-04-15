@@ -14,11 +14,14 @@ import polars as pl
 from seci_fdre_v_model.profile_templates import build_load_profile_frame
 
 if TYPE_CHECKING:
-    from seci_fdre_v_model.config import BatteryConfig
+    from seci_fdre_v_model.config import BatteryConfig, LoadConfig
     from seci_fdre_v_model.core.pipeline import SimulationContext
 
 IDENTITY_TOLERANCE_FLOAT64 = 1e-3
 IDENTITY_TOLERANCE_FLOAT32 = 1e-2
+AUX_STATE_CHARGING = "charging"
+AUX_STATE_DISCHARGING = "discharging"
+AUX_STATE_IDLE = "idle"
 
 
 @dataclass(frozen=True)
@@ -40,7 +43,7 @@ OUTPUT_SECTIONS: tuple[OutputSection, ...] = (
     OutputSection(
         "03_output_profile.csv",
         "Output Profile",
-        ("timestamp", "output_profile_kw", "aux_consumption_kw", "total_consumption_kw"),
+        ("timestamp", "output_profile_kw", "aux_state", "aux_consumption_kw", "total_consumption_kw"),
     ),
     OutputSection(
         "04_battery_capacity_cycles.csv",
@@ -116,33 +119,40 @@ def section_accounting_stage(df: pl.DataFrame, context: SimulationContext) -> pl
     total_generation = df["total_generation_kw"].to_numpy()
     wind = df["wind_kw"].to_numpy()
     solar = df["solar_kw"].to_numpy()
+    load_frame: pl.DataFrame | None = None
     if "output_profile_kw" in df.columns:
         output_profile = df["output_profile_kw"].to_numpy()
+    else:
+        load_frame = build_load_profile_frame(
+            df["timestamp"],
+            context.config.load,
+            battery_nominal_power_kw=context.config.battery.nominal_power_kw,
+        )
+        output_profile = load_frame["output_profile_kw"].to_numpy()
     if "aux_consumption_kw" in df.columns:
         aux_consumption = df["aux_consumption_kw"].to_numpy()
-    if "total_consumption_kw" in df.columns:
-        total_consumption = df["total_consumption_kw"].to_numpy()
-    elif "site_load_kw" in df.columns:
-        total_consumption = df["site_load_kw"].to_numpy()
-    else:
-        load_frame = build_load_profile_frame(df["timestamp"], context.config.load)
-        output_profile = load_frame["output_profile_kw"].to_numpy()
+    elif load_frame is not None:
         aux_consumption = load_frame["aux_consumption_kw"].to_numpy()
-        total_consumption = load_frame["total_consumption_kw"].to_numpy()
-    if "output_profile_kw" in df.columns and "aux_consumption_kw" not in df.columns:
+    elif context.config.load.uses_battery_state_aux:
+        aux_consumption = np.full(
+            df.height,
+            float(context.config.battery.nominal_power_kw) * float(context.config.load.aux_idle_fraction or 0.0),
+            dtype=np.float64,
+        )
+    else:
         aux_consumption = np.full(df.height, context.config.load.aux_consumption_kw, dtype=np.float64)
-    if "output_profile_kw" in df.columns and "total_consumption_kw" not in df.columns and "site_load_kw" not in df.columns:
-        total_consumption = output_profile + aux_consumption
     progress_cb = getattr(context, "progress_callback", None) or (
         getattr(context, "_progress", None)
     )
     preprocessing = context.config.preprocessing
     metrics = _simulate_section_accounting(
         total_generation,
-        total_consumption,
+        output_profile,
+        aux_consumption,
         wind,
         solar,
         context.config.battery,
+        context.config.load,
         dtype=preprocessing.simulation_dtype,
         identity_tolerance=_identity_tolerance(preprocessing.simulation_dtype),
         progress_callback=progress_cb,
@@ -152,8 +162,9 @@ def section_accounting_stage(df: pl.DataFrame, context: SimulationContext) -> pl
 
     result = df.with_columns(
         pl.Series("output_profile_kw", output_profile),
-        pl.Series("aux_consumption_kw", aux_consumption),
-        pl.Series("total_consumption_kw", total_consumption),
+        pl.Series("aux_state", metrics["aux_state"]),
+        pl.Series("aux_consumption_kw", metrics["aux_consumption_kw"]),
+        pl.Series("total_consumption_kw", metrics["total_consumption_kw"]),
         pl.Series("cum_wind_kw_min", metrics["cum_wind"]),
         pl.Series("cum_solar_kw_min", metrics["cum_solar"]),
         pl.Series("cum_total_kw_min", metrics["cum_total"]),
@@ -249,10 +260,12 @@ def write_section_outputs(
 
 def _simulate_section_accounting(
     total_generation: np.ndarray,
-    total_consumption: np.ndarray,
+    output_profile: np.ndarray,
+    aux_consumption: np.ndarray,
     wind: np.ndarray,
     solar: np.ndarray,
     config: BatteryConfig,
+    load_config: "LoadConfig",
     *,
     dtype: str = "float32",
     identity_tolerance: float = IDENTITY_TOLERANCE_FLOAT32,
@@ -265,6 +278,8 @@ def _simulate_section_accounting(
     cum_solar = np.cumsum(solar.astype(np_dtype))
     cum_total = np.cumsum(total_generation.astype(np_dtype))
 
+    resolved_aux_consumption = np.zeros(row_count, dtype=np_dtype)
+    total_consumption = np.zeros(row_count, dtype=np_dtype)
     current_cycle = np.zeros(row_count, dtype=np_dtype)
     cumulative_degradation = np.zeros(row_count, dtype=np_dtype)
     capacity_now_kw_min = np.zeros(row_count, dtype=np_dtype)
@@ -305,6 +320,7 @@ def _simulate_section_accounting(
     bess_finish_kw_min = np.zeros(row_count, dtype=np_dtype)
     identity_2_error_kw_min = np.zeros(row_count, dtype=np_dtype)
     identity_2_ok = np.zeros(row_count, dtype=np.int8)
+    aux_state: list[str] = [AUX_STATE_IDLE] * row_count
 
     nominal_capacity_kw_min = float(config.capacity_kwh) * 60.0
     nominal_capacity_kwh = float(config.capacity_kwh)
@@ -318,6 +334,9 @@ def _simulate_section_accounting(
     cumulative_drawn_kw_min = 0.0
     cumulative_stored_kw_min = 0.0
     prior_charge_count = 0.0
+    charge_aux_kw = float(config.nominal_power_kw) * float(load_config.aux_charge_fraction or 0.0)
+    discharge_aux_kw = float(config.nominal_power_kw) * float(load_config.aux_discharge_fraction or 0.0)
+    idle_aux_kw = float(config.nominal_power_kw) * float(load_config.aux_idle_fraction or 0.0)
 
     progress_interval = max(1, row_count // 20)
     for index in range(row_count):
@@ -332,76 +351,71 @@ def _simulate_section_accounting(
         # state in kWh bounded by capacity
         battery_opening_kw_min[index] = min(max(prior_closing_kw_min, 0.0), capacity_now_kw_min[index])
 
-        excess = max(float(total_generation[index]) - float(total_consumption[index]), 0.0)
-        deficit = max(float(total_consumption[index]) - float(total_generation[index]), 0.0)
-        excess_power_kw[index] = excess
-        deficit_power_kw[index] = deficit
-
-        # Per-minute timestep: stored energy (kW-min) caps average discharge power (kW) at the same numeric value.
-        # Also cap by inverter / PCS limit (kW).
-        soc_discharge_budget_kw = battery_opening_kw_min[index]
-        discharge_power_cap_kw = min(soc_discharge_budget_kw, max_discharge_kw)
-        required_draw = min(discharge_power_cap_kw, deficit)
-        battery_draw_required_kw[index] = required_draw
-
-        # calculate loss on the drawn amount
-        battery_draw_c_rate[index] = _rounded_c_rate(required_draw, nominal_capacity_kwh)
-        battery_draw_loss_rate[index] = _lookup_loss_rate(battery_draw_c_rate[index], config.discharge_loss_table)
-        battery_draw_loss_kw[index] = battery_draw_loss_rate[index] * required_draw
-
-        # total drawn from battery is required + loss, capped by stored energy (kW-min budget for this minute).
-        draw_total = required_draw + battery_draw_loss_kw[index]
-        if draw_total > soc_discharge_budget_kw:
-            battery_draw_final_kw[index] = soc_discharge_budget_kw
-            battery_draw_loss_kw[index] = battery_draw_loss_rate[index] * (
-                soc_discharge_budget_kw / (1 + battery_draw_loss_rate[index])
-            )
-            battery_draw_required_kw[index] = battery_draw_final_kw[index] - battery_draw_loss_kw[index]
+        if load_config.uses_battery_state_aux:
+            minute = None
+            for expected_state, candidate_aux_kw in (
+                (AUX_STATE_IDLE, idle_aux_kw),
+                (AUX_STATE_CHARGING, charge_aux_kw),
+                (AUX_STATE_DISCHARGING, discharge_aux_kw),
+            ):
+                candidate = _dispatch_minute(
+                    total_generation_kw=float(total_generation[index]),
+                    output_profile_kw=float(output_profile[index]),
+                    aux_consumption_kw=float(candidate_aux_kw),
+                    battery_opening_kw_min=float(battery_opening_kw_min[index]),
+                    capacity_now_kw_min=float(capacity_now_kw_min[index]),
+                    nominal_capacity_kwh=nominal_capacity_kwh,
+                    max_discharge_kw=max_discharge_kw,
+                    max_charge_kw=max_charge_kw,
+                    config=config,
+                )
+                if candidate["aux_state"] == expected_state:
+                    minute = candidate
+                    break
+            if minute is None:
+                minute = _dispatch_deadband_minute(
+                    total_generation_kw=float(total_generation[index]),
+                    output_profile_kw=float(output_profile[index]),
+                    aux_consumption_kw=idle_aux_kw,
+                    battery_opening_kw_min=float(battery_opening_kw_min[index]),
+                )
         else:
-            battery_draw_final_kw[index] = draw_total
+            minute = _dispatch_minute(
+                total_generation_kw=float(total_generation[index]),
+                output_profile_kw=float(output_profile[index]),
+                aux_consumption_kw=float(aux_consumption[index]),
+                battery_opening_kw_min=float(battery_opening_kw_min[index]),
+                capacity_now_kw_min=float(capacity_now_kw_min[index]),
+                nominal_capacity_kwh=nominal_capacity_kwh,
+                max_discharge_kw=max_discharge_kw,
+                max_charge_kw=max_charge_kw,
+                config=config,
+            )
+
+        aux_state[index] = str(minute["aux_state"])
+        resolved_aux_consumption[index] = minute["aux_consumption_kw"]
+        total_consumption[index] = minute["total_consumption_kw"]
+        excess_power_kw[index] = minute["excess_power_kw"]
+        deficit_power_kw[index] = minute["deficit_power_kw"]
+        battery_draw_required_kw[index] = minute["battery_draw_required_kw"]
+        battery_draw_c_rate[index] = minute["battery_draw_c_rate"]
+        battery_draw_loss_rate[index] = minute["battery_draw_loss_rate"]
+        battery_draw_loss_kw[index] = minute["battery_draw_loss_kw"]
+        battery_draw_final_kw[index] = minute["battery_draw_final_kw"]
+        battery_store_available_kw[index] = minute["battery_store_available_kw"]
+        battery_store_c_rate[index] = minute["battery_store_c_rate"]
+        battery_store_loss_rate[index] = minute["battery_store_loss_rate"]
+        battery_store_loss_kw[index] = minute["battery_store_loss_kw"]
+        battery_store_final_kw[index] = minute["battery_store_final_kw"]
+        grid_buy_kw[index] = minute["grid_buy_kw"]
+        grid_sell_kw[index] = minute["grid_sell_kw"]
+        battery_closing_kw_min[index] = minute["battery_closing_kw_min"]
+        soc_kw_min[index] = battery_closing_kw_min[index]
 
         cumulative_drawn_kw_min += battery_draw_final_kw[index]
         battery_draw_cumulative_kw_min[index] = cumulative_drawn_kw_min
-
-        remaining_headroom_kw = max(capacity_now_kw_min[index] - battery_opening_kw_min[index], 0.0)
-        store_available = 0.0
-        if excess > 0.0 and remaining_headroom_kw > 0.0:
-            # Charge power (kW) limited by surplus, headroom (kW-min → kW for 1 min), and PCS charge limit.
-            store_available = min(excess, remaining_headroom_kw, max_charge_kw)
-
-        battery_store_available_kw[index] = store_available
-        battery_store_c_rate[index] = _rounded_c_rate(store_available, nominal_capacity_kwh)
-        battery_store_loss_rate[index] = _lookup_loss_rate(battery_store_c_rate[index], config.charge_loss_table)
-        battery_store_loss_kw[index] = battery_store_loss_rate[index] * store_available
-
-        # cap what goes in by remaining headroom
-        # the net energy entering battery state is store_available - loss
-        net_store = max(store_available - battery_store_loss_kw[index], 0.0)
-        if net_store > remaining_headroom_kw:
-            battery_store_final_kw[index] = remaining_headroom_kw
-            # recalculate required inputs
-            store_available = remaining_headroom_kw / (1 - battery_store_loss_rate[index])
-            battery_store_loss_kw[index] = store_available - battery_store_final_kw[index]
-            battery_store_available_kw[index] = store_available
-        else:
-            battery_store_final_kw[index] = net_store
-
         cumulative_stored_kw_min += battery_store_final_kw[index]
         battery_store_cumulative_kw_min[index] = cumulative_stored_kw_min
-
-        # Recalculate grid flow now that we know exactly what battery did
-        grid_buy_kw[index] = max(deficit - battery_draw_required_kw[index], 0.0)
-        grid_sell_kw[index] = max(excess - battery_store_available_kw[index], 0.0)
-
-        # closing state physics
-        battery_closing_kw_min[index] = max(
-            min(
-                battery_opening_kw_min[index] - battery_draw_final_kw[index] + battery_store_final_kw[index],
-                capacity_now_kw_min[index],
-            ),
-            0.0,
-        )
-        soc_kw_min[index] = battery_closing_kw_min[index]
 
         # normalized views
         if nominal_capacity_kw_min > 0:
@@ -441,6 +455,9 @@ def _simulate_section_accounting(
         prior_charge_count = cum_charge_count[index]
 
     return {
+        "aux_state": aux_state,
+        "aux_consumption_kw": resolved_aux_consumption,
+        "total_consumption_kw": total_consumption,
         "cum_wind": cum_wind,
         "cum_solar": cum_solar,
         "cum_total": cum_total,
@@ -525,3 +542,121 @@ def _lookup_loss_rate(c_rate: float, loss_table: dict[float, float]) -> float:
 
 def _identity_tolerance(dtype: str) -> float:
     return IDENTITY_TOLERANCE_FLOAT32 if dtype == "float32" else IDENTITY_TOLERANCE_FLOAT64
+
+
+def _dispatch_minute(
+    *,
+    total_generation_kw: float,
+    output_profile_kw: float,
+    aux_consumption_kw: float,
+    battery_opening_kw_min: float,
+    capacity_now_kw_min: float,
+    nominal_capacity_kwh: float,
+    max_discharge_kw: float,
+    max_charge_kw: float,
+    config: "BatteryConfig",
+) -> dict[str, float | str]:
+    total_consumption_kw = output_profile_kw + aux_consumption_kw
+    excess = max(total_generation_kw - total_consumption_kw, 0.0)
+    deficit = max(total_consumption_kw - total_generation_kw, 0.0)
+
+    soc_discharge_budget_kw = battery_opening_kw_min
+    discharge_power_cap_kw = min(soc_discharge_budget_kw, max_discharge_kw)
+    required_draw = min(discharge_power_cap_kw, deficit)
+    draw_c_rate = _rounded_c_rate(required_draw, nominal_capacity_kwh)
+    draw_loss_rate = _lookup_loss_rate(draw_c_rate, config.discharge_loss_table)
+    draw_loss_kw = draw_loss_rate * required_draw
+    draw_total = required_draw + draw_loss_kw
+    if draw_total > soc_discharge_budget_kw:
+        draw_final_kw = soc_discharge_budget_kw
+        draw_loss_kw = draw_loss_rate * (soc_discharge_budget_kw / (1 + draw_loss_rate))
+        required_draw = draw_final_kw - draw_loss_kw
+    else:
+        draw_final_kw = draw_total
+
+    remaining_headroom_kw = max(capacity_now_kw_min - battery_opening_kw_min, 0.0)
+    store_available = 0.0
+    if excess > 0.0 and remaining_headroom_kw > 0.0:
+        store_available = min(excess, remaining_headroom_kw, max_charge_kw)
+
+    store_c_rate = _rounded_c_rate(store_available, nominal_capacity_kwh)
+    store_loss_rate = _lookup_loss_rate(store_c_rate, config.charge_loss_table)
+    store_loss_kw = store_loss_rate * store_available
+    net_store = max(store_available - store_loss_kw, 0.0)
+    if net_store > remaining_headroom_kw:
+        store_final_kw = remaining_headroom_kw
+        store_available = remaining_headroom_kw / (1 - store_loss_rate)
+        store_loss_kw = store_available - store_final_kw
+    else:
+        store_final_kw = net_store
+
+    grid_buy_kw = max(deficit - required_draw, 0.0)
+    grid_sell_kw = max(excess - store_available, 0.0)
+    battery_closing_kw_min = max(
+        min(
+            battery_opening_kw_min - draw_final_kw + store_final_kw,
+            capacity_now_kw_min,
+        ),
+        0.0,
+    )
+    aux_state = _resolved_aux_state(battery_draw_required_kw=required_draw, battery_store_available_kw=store_available)
+    return {
+        "aux_state": aux_state,
+        "aux_consumption_kw": aux_consumption_kw,
+        "total_consumption_kw": total_consumption_kw,
+        "excess_power_kw": excess,
+        "deficit_power_kw": deficit,
+        "battery_draw_required_kw": required_draw,
+        "battery_draw_c_rate": draw_c_rate,
+        "battery_draw_loss_rate": draw_loss_rate,
+        "battery_draw_loss_kw": draw_loss_kw,
+        "battery_draw_final_kw": draw_final_kw,
+        "battery_store_available_kw": store_available,
+        "battery_store_c_rate": store_c_rate,
+        "battery_store_loss_rate": store_loss_rate,
+        "battery_store_loss_kw": store_loss_kw,
+        "battery_store_final_kw": store_final_kw,
+        "grid_buy_kw": grid_buy_kw,
+        "grid_sell_kw": grid_sell_kw,
+        "battery_closing_kw_min": battery_closing_kw_min,
+    }
+
+
+def _dispatch_deadband_minute(
+    *,
+    total_generation_kw: float,
+    output_profile_kw: float,
+    aux_consumption_kw: float,
+    battery_opening_kw_min: float,
+) -> dict[str, float | str]:
+    total_consumption_kw = output_profile_kw + aux_consumption_kw
+    excess = max(total_generation_kw - total_consumption_kw, 0.0)
+    deficit = max(total_consumption_kw - total_generation_kw, 0.0)
+    return {
+        "aux_state": AUX_STATE_IDLE,
+        "aux_consumption_kw": aux_consumption_kw,
+        "total_consumption_kw": total_consumption_kw,
+        "excess_power_kw": excess,
+        "deficit_power_kw": deficit,
+        "battery_draw_required_kw": 0.0,
+        "battery_draw_c_rate": 0.0,
+        "battery_draw_loss_rate": 0.0,
+        "battery_draw_loss_kw": 0.0,
+        "battery_draw_final_kw": 0.0,
+        "battery_store_available_kw": 0.0,
+        "battery_store_c_rate": 0.0,
+        "battery_store_loss_rate": 0.0,
+        "battery_store_loss_kw": 0.0,
+        "battery_store_final_kw": 0.0,
+        "grid_buy_kw": deficit,
+        "grid_sell_kw": excess,
+        "battery_closing_kw_min": battery_opening_kw_min,
+    }
+
+
+def _resolved_aux_state(*, battery_draw_required_kw: float, battery_store_available_kw: float) -> str:
+    if battery_store_available_kw > 0.0:
+        return AUX_STATE_CHARGING
+    if battery_draw_required_kw > 0.0:
+        return AUX_STATE_DISCHARGING
+    return AUX_STATE_IDLE

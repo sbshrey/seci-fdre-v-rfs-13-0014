@@ -115,6 +115,9 @@ FLOAT_KEYS = {
     "simulation.grid.export_limit_kw",
     "simulation.load.output_profile_kw",
     "simulation.load.aux_consumption_kw",
+    "simulation.load.aux_charge_fraction",
+    "simulation.load.aux_discharge_fraction",
+    "simulation.load.aux_idle_fraction",
     "simulation.load.contracted_capacity_mw",
     "simulation.battery.nominal_power_kw",
     "simulation.battery.duration_hours",
@@ -146,6 +149,7 @@ TEXT_KEYS = {
     "simulation.preprocessing.gap_fill",
     "simulation.preprocessing.simulation_dtype",
     "simulation.load.profile_mode",
+    "simulation.load.aux_mode",
     "simulation.load.profile_template_id",
 }
 TABLE_KEYS = {
@@ -224,12 +228,22 @@ def config_form_api_values(project: ProjectConfig) -> dict[str, Any]:
         "simulation.grid.export_limit_kw": grid.export_limit_kw,
         "simulation.grid.import_limit_kw": "" if grid.import_limit_kw is None else grid.import_limit_kw,
         "simulation.load.profile_mode": load.profile_mode,
+        "simulation.load.aux_mode": load.aux_mode,
         "simulation.load.profile_template_id": load.profile_template_id or "",
         "simulation.load.contracted_capacity_mw": ""
         if load.contracted_capacity_mw is None
         else load.contracted_capacity_mw,
         "simulation.load.output_profile_kw": "" if load.output_profile_kw is None else load.output_profile_kw,
         "simulation.load.aux_consumption_kw": load.aux_consumption_kw,
+        "simulation.load.aux_charge_fraction": ""
+        if load.aux_charge_fraction is None
+        else load.aux_charge_fraction,
+        "simulation.load.aux_discharge_fraction": ""
+        if load.aux_discharge_fraction is None
+        else load.aux_discharge_fraction,
+        "simulation.load.aux_idle_fraction": ""
+        if load.aux_idle_fraction is None
+        else load.aux_idle_fraction,
         "simulation.battery.nominal_power_kw": bat.nominal_power_kw,
         "simulation.battery.duration_hours": bat.duration_hours,
         "simulation.battery.charge_efficiency": bat.charge_efficiency,
@@ -284,17 +298,25 @@ def ensure_workspace_ready(
         "output_profile_18_22": source_config.inputs.output_profile_18_22_path,
         "aux_power": source_config.inputs.aux_power_path,
     }
-    if any(spec.generated and not source_inputs[spec.key].exists() for spec in MANAGED_INPUT_SPECS):
+    if any(
+        spec.generated
+        and source_inputs[spec.key] is not None
+        and not source_inputs[spec.key].exists()
+        for spec in MANAGED_INPUT_SPECS
+    ):
         generate_tender_input_files(source_config)
     metadata = _load_metadata(state)
     for spec in MANAGED_INPUT_SPECS:
         target_path = state.inputs_dir / spec.canonical_name
+        source_path = source_inputs[spec.key]
+        if source_path is None:
+            continue
         if not target_path.exists():
-            shutil.copy2(source_inputs[spec.key], target_path)
+            shutil.copy2(source_path, target_path)
             metadata.setdefault(spec.key, {})
             metadata[spec.key].update(
                 {
-                    "original_name": source_inputs[spec.key].name,
+                    "original_name": source_path.name,
                     "source": "seed",
                     "updated_at": _iso_now(),
                 }
@@ -354,6 +376,8 @@ def save_project_form(state: WorkspaceState, form_data: dict[str, str]) -> Proje
 
 
 def list_managed_inputs(state: WorkspaceState) -> list[ManagedInput]:
+    project = load_project_config(state)
+    dynamic_aux_mode = project.simulation.load.uses_battery_state_aux
     metadata = _load_metadata(state)
     inputs: list[ManagedInput] = []
     for spec in MANAGED_INPUT_SPECS:
@@ -368,6 +392,13 @@ def list_managed_inputs(state: WorkspaceState) -> list[ManagedInput]:
             stat = path.stat()
             size_kb = stat.st_size / 1024.0
             modified_at = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        if spec.key == "aux_power" and dynamic_aux_mode:
+            validation_ok = True
+            validation_message = (
+                "Not used in battery_state aux mode."
+                if exists
+                else "Derived at run time in battery_state aux mode."
+            )
         meta = metadata.get(spec.key, {})
         inputs.append(
             ManagedInput(
@@ -391,6 +422,8 @@ def list_managed_inputs(state: WorkspaceState) -> list[ManagedInput]:
 
 def store_uploaded_input(state: WorkspaceState, input_key: str, upload: Any) -> ManagedInput:
     spec = _require_input_spec(input_key)
+    if input_key == "aux_power" and load_project_config(state).simulation.load.uses_battery_state_aux:
+        raise ValueError("aux_power.csv is not used in battery_state aux mode.")
     if upload is None or not getattr(upload, "filename", ""):
         raise ValueError("Choose a CSV file to upload.")
     filename = str(upload.filename)
@@ -555,8 +588,9 @@ def generate_active_inputs(state: WorkspaceState) -> list[ManagedInput]:
     path_to_key = {
         str(project.inputs.output_profile_path): "output_profile",
         str(project.inputs.output_profile_18_22_path): "output_profile_18_22",
-        str(project.inputs.aux_power_path): "aux_power",
     }
+    if project.inputs.aux_power_path is not None:
+        path_to_key[str(project.inputs.aux_power_path)] = "aux_power"
     for path in generated_paths:
         key = path_to_key[str(path)]
         metadata.setdefault(key, {})
@@ -595,8 +629,11 @@ def create_run_snapshot(
     run_config_dir.mkdir(parents=True, exist_ok=True)
     run_inputs_dir.mkdir(parents=True, exist_ok=True)
     package_dir.mkdir(parents=True, exist_ok=True)
+    aux_mode = str(((payload.get("simulation") or {}).get("load") or {}).get("aux_mode", "static_csv"))
 
     for spec in MANAGED_INPUT_SPECS:
+        if aux_mode == "battery_state" and spec.key == "aux_power":
+            continue
         source_path = state.inputs_dir / spec.canonical_name
         if not source_path.exists():
             raise FileNotFoundError(f"Managed input missing: {spec.label}")
@@ -1287,6 +1324,8 @@ def _build_input_fingerprints(inputs_dir: Path) -> list[dict[str, Any]]:
     fingerprints: list[dict[str, Any]] = []
     for spec in MANAGED_INPUT_SPECS:
         path = inputs_dir / spec.canonical_name
+        if not path.exists():
+            continue
         fingerprints.append(
             {
                 "key": spec.key,
