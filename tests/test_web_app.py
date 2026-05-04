@@ -30,6 +30,7 @@ def test_workspace_bootstrap_and_form_save(tmp_path: Path) -> None:
     saved = save_project_form(
         workspace,
         {
+            "inputs.generated_decimal_places": "3",
             "project.plant_name": "updated_plant",
             "project.simulation_start": "2025-01-01 00:00",
             "project.simulation_end": "2025-01-01 00:05",
@@ -42,10 +43,11 @@ def test_workspace_bootstrap_and_form_save(tmp_path: Path) -> None:
             "simulation.preprocessing.simulation_dtype": "float64",
             "simulation.grid.export_limit_kw": "1000.0",
             "simulation.grid.import_limit_kw": "",
-            "simulation.load.profile_mode": "template",
-            "simulation.load.profile_template_id": "seci_fdre_v_amendment_03",
+            "simulation.load.profile_mode": "seci",
+            "simulation.load.profile_template_id": "seci_fdre_ii_revised_annexure_b",
             "simulation.load.contracted_capacity_mw": "0.1",
             "simulation.load.output_profile_kw": "",
+            "simulation.load.output_profile_18_22_kw": "42.0",
             "simulation.load.aux_consumption_kw": "10.0",
             "simulation.battery.nominal_power_kw": "100.0",
             "simulation.battery.duration_hours": "1.0",
@@ -66,6 +68,8 @@ def test_workspace_bootstrap_and_form_save(tmp_path: Path) -> None:
     )
 
     assert saved.project.plant_name == "updated_plant"
+    assert saved.inputs.generated_decimal_places == 3
+    assert saved.simulation.load.output_profile_18_22_kw == 42.0
     reloaded = load_project_config(workspace)
     assert reloaded.inputs.solar_path == workspace.inputs_dir / "solar.csv"
     assert reloaded.inputs.output_profile_path == workspace.inputs_dir / "output_profile.csv"
@@ -93,12 +97,17 @@ def test_web_control_room_flow(tmp_path: Path) -> None:
     assert b'<select name="simulation.preprocessing.gap_fill">' in config_response.data
     assert b'<select name="simulation.preprocessing.simulation_dtype">' in config_response.data
     assert b'name="simulation.load.profile_mode"' in config_response.data
+    assert b'name="inputs.generated_decimal_places"' in config_response.data
+    assert b"Time Based - 2 Hours" in config_response.data
+    assert b"Manual" in config_response.data
+    assert b'name="manual_output_profile_file"' in config_response.data
     assert b'data-profile-mode-select' in config_response.data
     assert b'data-aux-mode-select' in config_response.data
     assert b'data-aux-battery-only' in config_response.data
     assert b'data-aux-static-only' in config_response.data
-    assert b'data-template-only' in config_response.data
-    assert b'data-flat-only' in config_response.data
+    assert b'data-seci-only' in config_response.data
+    assert b'data-generated-profile-only' in config_response.data
+    assert b'data-manual-profile-only' in config_response.data
     assert b'disabled' in config_response.data
     assert b'Linear interpolate' in config_response.data
     assert b'float64' in config_response.data
@@ -264,6 +273,7 @@ def test_profile_mode_fields_toggle_and_save(tmp_path: Path) -> None:
             "simulation.grid.import_limit_kw": "",
             "simulation.load.profile_mode": "flat",
             "simulation.load.output_profile_kw": "275.0",
+            "simulation.load.output_profile_18_22_kw": "80.0",
             "simulation.load.aux_consumption_kw": "10.0",
             "simulation.battery.nominal_power_kw": "100.0",
             "simulation.battery.duration_hours": "1.0",
@@ -285,8 +295,65 @@ def test_profile_mode_fields_toggle_and_save(tmp_path: Path) -> None:
 
     assert flat_project.simulation.load.profile_mode == "flat"
     assert flat_project.simulation.load.output_profile_kw == 275.0
-    assert flat_project.simulation.load.profile_template_id == "seci_fdre_v_amendment_03"
+    assert flat_project.simulation.load.output_profile_18_22_kw == 80.0
+    assert flat_project.simulation.load.profile_template_id == "seci_fdre_ii_revised_annexure_b"
     assert flat_project.simulation.load.contracted_capacity_mw == 0.1
+
+
+def test_config_page_manual_profile_uploads_output_csv(tmp_path: Path) -> None:
+    source_config = _write_project_config(tmp_path)
+    workspace_root = tmp_path / ".workspace"
+    app = create_app(workspace_root=workspace_root, source_config_path=source_config)
+    client = app.test_client()
+
+    response = client.post(
+        "/config/save",
+        data={
+            "project.plant_name": "manual_plant",
+            "project.simulation_start": "2025-01-01 00:00",
+            "project.simulation_end": "2025-01-01 00:05",
+            "simulation.data.solar_enabled": "on",
+            "simulation.data.wind_enabled": "on",
+            "simulation.preprocessing.frequency": "1m",
+            "simulation.preprocessing.gap_fill": "zero",
+            "simulation.preprocessing.max_interpolation_gap_minutes": "15",
+            "simulation.preprocessing.simulation_dtype": "float64",
+            "simulation.grid.export_limit_kw": "1000.0",
+            "simulation.grid.import_limit_kw": "",
+            "simulation.load.profile_mode": "manual",
+            "simulation.load.aux_consumption_kw": "10.0",
+            "simulation.battery.nominal_power_kw": "100.0",
+            "simulation.battery.duration_hours": "1.0",
+            "simulation.battery.charge_efficiency": "1.0",
+            "simulation.battery.discharge_efficiency": "1.0",
+            "simulation.battery.degradation_per_cycle": "0.0",
+            "simulation.battery.initial_soc_fraction": "0.5",
+            "simulation.battery.min_soc_fraction": "0.0",
+            "simulation.battery.max_soc_fraction": "1.0",
+            "simulation.battery.charge_loss_table": "0.0: 0.0\n1.0: 0.0",
+            "simulation.battery.discharge_loss_table": "0.0: 0.0\n1.0: 0.0",
+            "sensitivity.wind_multipliers": "1.0",
+            "sensitivity.solar_multipliers": "1.0",
+            "sensitivity.profile_multipliers": "1.0",
+            "sensitivity.battery_capacity_kwh_values": "100.0",
+            "sensitivity.battery_duration_hour_values": "1.0",
+            "manual_output_profile_file": (
+                io.BytesIO(b"timestamp,output_profile_kw\n2025-01-01 00:00,123\n"),
+                "manual_profile.csv",
+            ),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    state = ensure_workspace_ready(workspace_root, source_config_path=source_config)
+    project = load_project_config(state)
+    uploaded = (workspace_root / "inputs" / "output_profile.csv").read_text(encoding="utf-8")
+
+    assert response.status_code == 200
+    assert b"Configuration saved and output profile uploaded." in response.data
+    assert project.simulation.load.profile_mode == "manual"
+    assert "123" in uploaded
 
 
 def test_aux_mode_fields_toggle_and_save(tmp_path: Path) -> None:
@@ -307,9 +374,10 @@ def test_aux_mode_fields_toggle_and_save(tmp_path: Path) -> None:
             "simulation.preprocessing.simulation_dtype": "float64",
             "simulation.grid.export_limit_kw": "1000.0",
             "simulation.grid.import_limit_kw": "",
-            "simulation.load.profile_mode": "template",
-            "simulation.load.profile_template_id": "seci_fdre_v_amendment_03",
+            "simulation.load.profile_mode": "seci",
+            "simulation.load.profile_template_id": "seci_fdre_ii_revised_annexure_b",
             "simulation.load.contracted_capacity_mw": "0.1",
+            "simulation.load.output_profile_18_22_kw": "90.0",
             "simulation.load.aux_mode": "battery_state",
             "simulation.load.aux_charge_fraction": "0.03",
             "simulation.load.aux_discharge_fraction": "0.025",
@@ -336,6 +404,7 @@ def test_aux_mode_fields_toggle_and_save(tmp_path: Path) -> None:
     assert dynamic_project.simulation.load.aux_charge_fraction == 0.03
     assert dynamic_project.simulation.load.aux_discharge_fraction == 0.025
     assert dynamic_project.simulation.load.aux_idle_fraction == 0.015
+    assert dynamic_project.simulation.load.output_profile_18_22_kw == 90.0
 
 
 def test_dynamic_aux_inputs_page_disables_aux_csv_upload(tmp_path: Path) -> None:
@@ -362,8 +431,9 @@ def test_dynamic_aux_inputs_page_disables_aux_csv_upload(tmp_path: Path) -> None
 def _write_project_config(
     tmp_path: Path,
     *,
-    profile_mode: str = "template",
+    profile_mode: str = "seci",
     output_profile_kw: float | None = None,
+    output_profile_18_22_kw: float | None = None,
     aux_mode: str = "static_csv",
     include_aux_power_path: bool = True,
     aux_consumption_kw: float = 10.0,
@@ -412,15 +482,17 @@ def _write_project_config(
         "  load:",
         f"    profile_mode: {profile_mode}",
     ]
-    if profile_mode == "template":
+    if profile_mode in {"seci", "template"}:
         load_lines.extend(
             [
-                "    profile_template_id: seci_fdre_v_amendment_03",
+                "    profile_template_id: seci_fdre_ii_revised_annexure_b",
                 "    contracted_capacity_mw: 0.1",
             ]
         )
-    else:
+    elif profile_mode != "manual":
         load_lines.append(f"    output_profile_kw: {float(output_profile_kw or 0.0)}")
+    if output_profile_18_22_kw is not None:
+        load_lines.append(f"    output_profile_18_22_kw: {float(output_profile_18_22_kw)}")
 
     if aux_mode == "battery_state":
         load_lines.extend(
@@ -560,6 +632,22 @@ def test_create_run_snapshot_dynamic_aux_skips_aux_input_copy(tmp_path: Path) ->
 
     assert snapshot["simulation"]["load"]["aux_mode"] == "battery_state"
     assert not (run_dir / "inputs" / "aux_power.csv").exists()
+
+
+def test_create_run_snapshot_generates_missing_static_aux_input(tmp_path: Path) -> None:
+    source_config = _write_project_config(tmp_path, aux_consumption_kw=12.3456)
+    workspace_root = tmp_path / ".workspace"
+    state = ensure_workspace_ready(workspace_root, source_config_path=source_config)
+    workspace_aux = workspace_root / "inputs" / "aux_power.csv"
+    workspace_aux.unlink()
+
+    _run_id, run_dir, _config_path, _package_dir = create_run_snapshot(state, study_profile="workspace")
+
+    assert workspace_aux.exists()
+    workspace_frame = pl.read_csv(workspace_aux, try_parse_dates=True)
+    snapshot_frame = pl.read_csv(run_dir / "inputs" / "aux_power.csv", try_parse_dates=True)
+    assert workspace_frame["aux_power_kw"].to_list() == [12.35] * 6
+    assert snapshot_frame["aux_power_kw"].to_list() == [12.35] * 6
 
 
 def test_apply_ideal_preset_and_ideal_tile_web(tmp_path: Path) -> None:

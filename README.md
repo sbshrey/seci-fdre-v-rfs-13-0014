@@ -4,9 +4,9 @@ Local SECI FDRE-V study runner with both a CLI workflow and a Docker Compose con
 
 ## What It Does
 
-- generates separate tender-derived files for:
-  - output profile
-  - output profile for `18:00-22:00`
+- generates separate profile files for:
+  - output profile from `flat`, `time_based_2h`, `time_based_4h`, `seci`, or uploaded `manual` mode
+  - configured constant output profile for `18:00-22:00`
   - aux power in legacy `static_csv` mode
 - runs a minute-level BESS simulation from solar, wind, and output-profile files, with aux power supplied either by:
   - a legacy aux-power CSV, or
@@ -117,8 +117,8 @@ The starter config is `config/project.yaml`.
 Key sections:
 
 - `project`: plant name, output dir, simulation window
-- `inputs`: solar, wind, output profile, evening profile, and optional aux power file paths
-- `simulation`: data toggles, grid, load, battery
+- `inputs`: solar, wind, output profile, evening profile, and optional aux power file paths. `inputs.generated_decimal_places` controls float precision for generated input CSVs and defaults to `2`.
+- `simulation`: data toggles, grid, load, battery. `simulation.load.profile_mode` controls whether `output_profile.csv` is generated from `output_profile_kw`, generated from the SECI Revised Annexure-B profile, or supplied manually. In `seci` mode the reference shape is the table extracted from `docs/SECI000116-2493087-RevisedAnnexure-BFDRE-II.pdf` and stored as `seci_fdre_v_model/profile_assets/seci_fdre_ii_revised_annexure_b.csv`; it is normalized to active solar, wind, or solar+wind input energy.
 - `sensitivity`: wind, solar, profile, battery capacity, battery hours
 
 ## Outputs

@@ -96,8 +96,8 @@ project:
 inputs:
   solar_path: {solar_out.as_posix()}
   wind_path: {wind_out.as_posix()}
-  output_profile_path: {(repo / "data" / "seci_fdre_v_amendment_03_output_profile.csv").as_posix()}
-  output_profile_18_22_path: {(repo / "data" / "seci_fdre_v_amendment_03_output_profile_18_22.csv").as_posix()}
+  output_profile_path: {(repo / "data" / "seci_fdre_ii_revised_annexure_b_output_profile.csv").as_posix()}
+  output_profile_18_22_path: {(repo / "data" / "seci_fdre_ii_revised_annexure_b_output_profile_18_22.csv").as_posix()}
   aux_power_path: {(repo / "data" / "aux_power_profile.csv").as_posix()}
 
 simulation:
@@ -115,7 +115,7 @@ simulation:
     import_limit_kw: null
   load:
     profile_mode: template
-    profile_template_id: seci_fdre_v_amendment_03
+    profile_template_id: seci_fdre_ii_revised_annexure_b
     contracted_capacity_mw: 1.0
     aux_consumption_kw: 20.0
   battery:
@@ -164,8 +164,8 @@ project:
 inputs:
   solar_path: {solar_out.as_posix()}
   wind_path: {wind_out.as_posix()}
-  output_profile_path: {(repo / "data" / "seci_fdre_v_amendment_03_output_profile.csv").as_posix()}
-  output_profile_18_22_path: {(repo / "data" / "seci_fdre_v_amendment_03_output_profile_18_22.csv").as_posix()}
+  output_profile_path: {(repo / "data" / "seci_fdre_ii_revised_annexure_b_output_profile.csv").as_posix()}
+  output_profile_18_22_path: {(repo / "data" / "seci_fdre_ii_revised_annexure_b_output_profile_18_22.csv").as_posix()}
 
 simulation:
   data:
@@ -182,7 +182,7 @@ simulation:
     import_limit_kw: null
   load:
     profile_mode: template
-    profile_template_id: seci_fdre_v_amendment_03
+    profile_template_id: seci_fdre_ii_revised_annexure_b
     contracted_capacity_mw: 1.0
     aux_mode: battery_state
     aux_charge_fraction: 0.03

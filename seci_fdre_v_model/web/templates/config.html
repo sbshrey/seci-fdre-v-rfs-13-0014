@@ -22,6 +22,7 @@
 
 <form
   method="post"
+  enctype="multipart/form-data"
   action="{{ url_for('save_config') }}"
   class="config-form"
   data-config-form
@@ -91,6 +92,10 @@
   </section>
 
   <section class="panel form-section" data-profile-mode-panel>
+    {% set profile_mode = project.simulation.load.profile_mode %}
+    {% set is_seci_profile = profile_mode in ['seci', 'template'] %}
+    {% set is_generated_profile = profile_mode in ['flat', 'time_based_2h', 'time_based_4h'] %}
+    {% set is_manual_profile = profile_mode == 'manual' %}
     <div class="panel-header"><h3>Grid and Load</h3></div>
     <div class="form-grid">
       <label>
@@ -101,6 +106,10 @@
         <span>Import Limit (kW)</span>
         <input type="number" step="any" name="simulation.grid.import_limit_kw" value="{{ '' if project.simulation.grid.import_limit_kw is none else project.simulation.grid.import_limit_kw }}">
       </label>
+      <label>
+        <span>Generated CSV Decimals</span>
+        <input type="number" min="0" step="1" name="inputs.generated_decimal_places" value="{{ project.inputs.generated_decimal_places }}">
+      </label>
       <label data-mode-field="profile_mode">
         <span>Profile Mode</span>
         <select name="simulation.load.profile_mode" data-profile-mode-select>
@@ -110,41 +119,53 @@
         </select>
       </label>
       <label
-        data-mode-field="template_only"
-        class="{% if project.simulation.load.profile_mode == 'flat' %}mode-field-disabled{% else %}mode-field-active{% endif %}">
-        <span>Profile Template ID</span>
+        data-mode-field="seci_only"
+        class="{% if is_seci_profile %}mode-field-active{% else %}mode-field-disabled{% endif %}">
+        <span>SECI Template ID</span>
         <select
           name="simulation.load.profile_template_id"
-          data-template-only
-          {% if project.simulation.load.profile_mode == 'flat' %}disabled{% endif %}>
+          data-seci-only
+          {% if not is_seci_profile %}disabled{% endif %}>
           {% for value, label in select_options["simulation.load.profile_template_id"] %}
             <option value="{{ value }}" {% if project.simulation.load.profile_template_id == value %}selected{% endif %}>{{ label }}</option>
           {% endfor %}
         </select>
       </label>
       <label
-        data-mode-field="template_only"
-        class="{% if project.simulation.load.profile_mode == 'flat' %}mode-field-disabled{% else %}mode-field-active{% endif %}">
+        data-mode-field="seci_only"
+        class="{% if is_seci_profile %}mode-field-active{% else %}mode-field-disabled{% endif %}">
         <span>Contracted Capacity (MW)</span>
         <input
           type="number"
           step="any"
           name="simulation.load.contracted_capacity_mw"
           value="{{ '' if project.simulation.load.contracted_capacity_mw is none else project.simulation.load.contracted_capacity_mw }}"
-          data-template-only
-          {% if project.simulation.load.profile_mode == 'flat' %}disabled{% endif %}>
+          data-seci-only
+          {% if not is_seci_profile %}disabled{% endif %}>
       </label>
       <label
-        data-mode-field="flat_only"
-        class="{% if project.simulation.load.profile_mode == 'flat' %}mode-field-active{% else %}mode-field-disabled{% endif %}">
+        data-mode-field="generated_profile"
+        class="{% if is_generated_profile %}mode-field-active{% else %}mode-field-disabled{% endif %}">
         <span>Output Profile (kW)</span>
         <input
           type="number"
           step="any"
           name="simulation.load.output_profile_kw"
           value="{{ '' if project.simulation.load.output_profile_kw is none else project.simulation.load.output_profile_kw }}"
-          data-flat-only
-          {% if project.simulation.load.profile_mode != 'flat' %}disabled{% endif %}>
+          data-generated-profile-only
+          {% if not is_generated_profile %}disabled{% endif %}>
+      </label>
+      <label
+        data-mode-field="manual_profile"
+        class="{% if is_manual_profile %}mode-field-active{% else %}mode-field-disabled{% endif %}">
+        <span>Manual Output Profile CSV</span>
+        <input
+          type="file"
+          name="manual_output_profile_file"
+          accept=".csv,text/csv"
+          data-manual-profile-only
+          {% if not is_manual_profile %}disabled{% endif %}>
+        <small>{{ output_profile_input.original_name if output_profile_input and output_profile_input.original_name else (output_profile_input.canonical_name if output_profile_input and output_profile_input.exists else 'No output profile uploaded') }}</small>
       </label>
       <label data-aux-mode-field="aux_mode">
         <span>Aux Mode</span>

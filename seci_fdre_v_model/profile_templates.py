@@ -10,11 +10,14 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-from seci_fdre_v_model.config import LoadConfig
+from seci_fdre_v_model.config import (
+    LoadConfig,
+    SECI_REVISED_ANNEXURE_B_TEMPLATE_ID,
+    TIME_BASED_PROFILE_DURATIONS,
+)
 
 MONTH_COLUMNS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
 MONTH_INDEX_BY_NAME = {name: index for index, name in enumerate(MONTH_COLUMNS, start=1)}
-NON_LEAP_MONTH_DAYS = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
 
 
 @dataclass(frozen=True)
@@ -26,28 +29,17 @@ class TenderProfileTemplate:
     base_capacity_mw: float
     block_minutes: int
     required_dfr: float
-    annual_energy_per_mw_kwh: float
     source_doc: str
 
 
 SUPPORTED_TENDER_PROFILES: dict[str, TenderProfileTemplate] = {
-    "seci_fdre_v_amendment_03": TenderProfileTemplate(
-        template_id="seci_fdre_v_amendment_03",
-        asset_file="seci_fdre_v_amendment_03.csv",
-        base_capacity_mw=1000.0,
-        block_minutes=60,
-        required_dfr=0.75,
-        annual_energy_per_mw_kwh=5_589_988.0,
-        source_doc="SECI FDRE-V Amendment-03 (2024-06-03)",
-    ),
-    "seci_fdre_ii_revised_annexure_b": TenderProfileTemplate(
-        template_id="seci_fdre_ii_revised_annexure_b",
+    SECI_REVISED_ANNEXURE_B_TEMPLATE_ID: TenderProfileTemplate(
+        template_id=SECI_REVISED_ANNEXURE_B_TEMPLATE_ID,
         asset_file="seci_fdre_ii_revised_annexure_b.csv",
         base_capacity_mw=1500.0,
         block_minutes=15,
         required_dfr=0.90,
-        annual_energy_per_mw_kwh=5_759_734.0,
-        source_doc="SECI FDRE-II Revised Annexure-B",
+        source_doc="docs/SECI000116-2493087-RevisedAnnexure-BFDRE-II.pdf",
     ),
 }
 
@@ -67,12 +59,20 @@ def build_load_profile_frame(
     *,
     battery_nominal_power_kw: float | None = None,
 ) -> pl.DataFrame:
-    """Build minute-level output/aux/total consumption columns for flat or tender template mode."""
+    """Build minute-level output/aux/total consumption columns for generated profile modes."""
     if timestamps.dtype != pl.Datetime:
         timestamps = timestamps.cast(pl.Datetime)
 
     if load_config.uses_template_profile:
         output_profile = _expand_template_output_profile(timestamps, load_config)
+    elif load_config.uses_manual_profile:
+        raise ValueError("Manual profile mode requires an uploaded output_profile.csv file.")
+    elif load_config.uses_time_based_profile:
+        output_profile = _expand_time_based_output_profile(
+            timestamps,
+            output_kw=float(load_config.output_profile_kw or 0.0),
+            duration_hours=TIME_BASED_PROFILE_DURATIONS[load_config.profile_mode],
+        )
     else:
         output_kw = float(load_config.output_profile_kw or 0.0)
         output_profile = np.full(len(timestamps), output_kw, dtype=np.float64)
@@ -106,7 +106,6 @@ def compute_profile_compliance_tables(
     template = get_tender_profile(load_config.profile_template_id or "")
     block_granularity = f"{template.block_minutes}m"
     required_dfr = template.required_dfr
-    energy_normalization_factor = _profile_energy_normalization_factor(template.template_id)
 
     working = df.select(
         pl.col("timestamp").cast(pl.Datetime),
@@ -134,10 +133,6 @@ def compute_profile_compliance_tables(
             block_supplied_kwh=pl.col("project_supply_to_profile_kw").sum() / 60.0,
         )
         .sort("block_start")
-        .with_columns(
-            block_target_kwh=pl.col("block_target_kwh") * energy_normalization_factor,
-            block_supplied_kwh=pl.col("block_supplied_kwh") * energy_normalization_factor,
-        )
         .with_columns(
             block_dfr=pl.when(pl.col("block_target_kwh") > 0)
             .then((pl.col("block_supplied_kwh") / pl.col("block_target_kwh")).clip(upper_bound=1.0))
@@ -176,7 +171,7 @@ def compute_profile_summary_metrics(
     """Build summary metrics related to tender profile compliance."""
     if not load_config.uses_template_profile:
         return {
-            "profile_template_id": "flat",
+            "profile_template_id": load_config.profile_mode,
             "required_dfr_pct": None,
             "min_monthly_dfr_pct": None,
             "months_below_dfr_threshold": None,
@@ -187,7 +182,7 @@ def compute_profile_summary_metrics(
         }
 
     template = get_tender_profile(load_config.profile_template_id or "")
-    annual_energy_target_kwh = template.annual_energy_per_mw_kwh * float(load_config.contracted_capacity_mw or 0.0)
+    annual_energy_target_kwh = 0.0
     annual_profile_target_kwh = 0.0
     annual_profile_supplied_kwh = 0.0
     min_monthly_dfr_pct: float | None = None
@@ -196,6 +191,7 @@ def compute_profile_summary_metrics(
     if block_df is not None and block_df.height > 0:
         annual_profile_target_kwh = float(block_df["block_target_kwh"].sum())
         annual_profile_supplied_kwh = float(block_df["block_supplied_kwh"].sum())
+        annual_energy_target_kwh = annual_profile_target_kwh
 
     if monthly_df is not None and monthly_df.height > 0:
         min_monthly_dfr_pct = float(monthly_df["monthly_dfr_pct"].min())
@@ -243,28 +239,19 @@ def _load_template_blocks(template_id: str) -> pl.DataFrame:
     )
 
 
-@lru_cache(maxsize=None)
-def _profile_energy_normalization_factor(template_id: str) -> float:
-    template = get_tender_profile(template_id)
-    blocks = _load_template_blocks(template_id)
-    annual_mwh_at_base_capacity = 0.0
-
-    for month_index, days_in_month in enumerate(NON_LEAP_MONTH_DAYS, start=1):
-        month_blocks = blocks.filter(pl.col("month_index") == month_index)
-        daily_mwh = float(month_blocks["profile_mw"].sum()) * (template.block_minutes / 60.0)
-        annual_mwh_at_base_capacity += daily_mwh * days_in_month
-
-    annual_kwh_per_mw = (annual_mwh_at_base_capacity * 1000.0) / template.base_capacity_mw
-    if annual_kwh_per_mw <= 0:
-        return 1.0
-    return template.annual_energy_per_mw_kwh / annual_kwh_per_mw
-
-
 def _expand_template_output_profile(timestamps: pl.Series, load_config: LoadConfig) -> np.ndarray:
     template = get_tender_profile(load_config.profile_template_id or "")
-    blocks = _load_template_blocks(template.template_id)
     scale = float(load_config.contracted_capacity_mw or 0.0) / template.base_capacity_mw
+    return _expand_template_shape_profile_kw(timestamps, template.template_id, scale=scale)
 
+
+def expand_default_seci_shape_profile_kw(timestamps: pl.Series) -> np.ndarray:
+    return _expand_template_shape_profile_kw(timestamps, SECI_REVISED_ANNEXURE_B_TEMPLATE_ID, scale=1.0)
+
+
+def _expand_template_shape_profile_kw(timestamps: pl.Series, template_id: str, *, scale: float = 1.0) -> np.ndarray:
+    template = get_tender_profile(template_id)
+    blocks = _load_template_blocks(template.template_id)
     expanded = (
         pl.DataFrame({"timestamp": timestamps})
         .with_columns(
@@ -292,4 +279,32 @@ def _expand_template_output_profile(timestamps: pl.Series, load_config: LoadConf
         raise ValueError(
             f"Unable to expand tender profile '{template.template_id}' for all simulation timestamps."
         )
+    return expanded["output_profile_kw"].to_numpy()
+
+
+def _expand_time_based_output_profile(
+    timestamps: pl.Series,
+    *,
+    output_kw: float,
+    duration_hours: int,
+    start_hour: int = 18,
+) -> np.ndarray:
+    start_minute = start_hour * 60
+    end_minute = start_minute + (duration_hours * 60)
+    expanded = (
+        pl.DataFrame({"timestamp": timestamps})
+        .with_columns(
+            minute_of_day=(
+                (pl.col("timestamp").dt.hour().cast(pl.Int32) * 60)
+                + pl.col("timestamp").dt.minute().cast(pl.Int32)
+            ).cast(pl.Int32)
+        )
+        .with_columns(
+            output_profile_kw=pl.when(
+                pl.col("minute_of_day").is_between(start_minute, end_minute - 1, closed="both")
+            )
+            .then(pl.lit(float(output_kw)))
+            .otherwise(0.0)
+        )
+    )
     return expanded["output_profile_kw"].to_numpy()

@@ -46,6 +46,24 @@ DEFAULT_DISCHARGE_LOSS_TABLE = {
     1.4: 0.067,
     1.5: 0.067,
 }
+DEFAULT_GENERATED_FILE_DECIMAL_PLACES = 2
+SECI_PROFILE_MODE = "seci"
+LEGACY_TEMPLATE_PROFILE_MODE = "template"
+SECI_REVISED_ANNEXURE_B_TEMPLATE_ID = "seci_fdre_ii_revised_annexure_b"
+FLAT_PROFILE_MODE = "flat"
+TIME_BASED_2H_PROFILE_MODE = "time_based_2h"
+TIME_BASED_4H_PROFILE_MODE = "time_based_4h"
+MANUAL_PROFILE_MODE = "manual"
+TIME_BASED_PROFILE_DURATIONS = {
+    TIME_BASED_2H_PROFILE_MODE: 2,
+    TIME_BASED_4H_PROFILE_MODE: 4,
+}
+SUPPORTED_PROFILE_MODES = {
+    FLAT_PROFILE_MODE,
+    *TIME_BASED_PROFILE_DURATIONS,
+    SECI_PROFILE_MODE,
+    MANUAL_PROFILE_MODE,
+}
 
 
 @dataclass(frozen=True)
@@ -63,6 +81,7 @@ class InputFilesConfig:
     output_profile_path: Path
     output_profile_18_22_path: Path
     aux_power_path: Path | None
+    generated_decimal_places: int = DEFAULT_GENERATED_FILE_DECIMAL_PLACES
 
 
 @dataclass(frozen=True)
@@ -93,12 +112,13 @@ class GridConfig:
 @dataclass(frozen=True)
 class LoadConfig:
     output_profile_kw: float | None = None
+    output_profile_18_22_kw: float | None = None
     aux_consumption_kw: float = 0.0
     aux_mode: str = "static_csv"
     aux_charge_fraction: float | None = None
     aux_discharge_fraction: float | None = None
     aux_idle_fraction: float | None = None
-    profile_mode: str = "template"
+    profile_mode: str = SECI_PROFILE_MODE
     profile_template_id: str | None = None
     contracted_capacity_mw: float | None = None
     output_profile_path: str | None = None
@@ -107,7 +127,15 @@ class LoadConfig:
 
     @property
     def uses_template_profile(self) -> bool:
-        return self.profile_mode == "template"
+        return self.profile_mode in {SECI_PROFILE_MODE, LEGACY_TEMPLATE_PROFILE_MODE}
+
+    @property
+    def uses_time_based_profile(self) -> bool:
+        return self.profile_mode in TIME_BASED_PROFILE_DURATIONS
+
+    @property
+    def uses_manual_profile(self) -> bool:
+        return self.profile_mode == MANUAL_PROFILE_MODE
 
     @property
     def uses_static_aux(self) -> bool:
@@ -194,25 +222,28 @@ class SimulationConfig:
             raise ValueError("Only 1-minute simulation frequency is supported.")
         if self.preprocessing.max_interpolation_gap_minutes < 0:
             raise ValueError("max_interpolation_gap_minutes must be non-negative.")
-        if self.load.profile_mode not in {"flat", "template"}:
-            raise ValueError("load.profile_mode must be either 'flat' or 'template'.")
+        if self.load.profile_mode not in {*SUPPORTED_PROFILE_MODES, LEGACY_TEMPLATE_PROFILE_MODE}:
+            supported = ", ".join(sorted(SUPPORTED_PROFILE_MODES))
+            raise ValueError(f"load.profile_mode must be one of: {supported}.")
         if self.load.aux_mode not in {"static_csv", "battery_state"}:
             raise ValueError("load.aux_mode must be either 'static_csv' or 'battery_state'.")
-        if self.load.profile_mode == "flat":
+        if self.load.profile_mode in {FLAT_PROFILE_MODE, *TIME_BASED_PROFILE_DURATIONS}:
             if self.load.output_profile_path is None:
-                raise ValueError("load.output_profile_path is required in flat profile mode.")
-        else:
+                raise ValueError("load.output_profile_path is required in generated profile modes.")
+            if self.load.output_profile_kw is None or self.load.output_profile_kw < 0:
+                raise ValueError("load.output_profile_kw must be non-negative in flat or time-based profile modes.")
+        elif self.load.uses_template_profile:
             if not self.load.profile_template_id:
-                raise ValueError("load.profile_template_id is required in template profile mode.")
+                raise ValueError("load.profile_template_id is required in SECI profile mode.")
             if self.load.profile_template_id not in SUPPORTED_TENDER_PROFILES:
                 supported = ", ".join(sorted(SUPPORTED_TENDER_PROFILES))
                 raise ValueError(
                     f"Unsupported load.profile_template_id '{self.load.profile_template_id}'. Expected one of: {supported}."
                 )
-            if self.load.contracted_capacity_mw is None or self.load.contracted_capacity_mw <= 0:
-                raise ValueError("load.contracted_capacity_mw must be positive in template profile mode.")
         if self.load.output_profile_path is None:
             raise ValueError("load.output_profile_path must be set.")
+        if self.load.output_profile_18_22_kw is not None and self.load.output_profile_18_22_kw < 0:
+            raise ValueError("load.output_profile_18_22_kw must be non-negative when provided.")
         if self.load.uses_static_aux:
             if self.load.aux_power_path is None:
                 raise ValueError("load.aux_power_path must be set in static_csv aux mode.")
@@ -263,12 +294,15 @@ class ProjectConfig:
         inputs = InputFilesConfig(
             solar_path=_resolve_path(base_dir, inputs_payload.get("solar_path", "../data/Solar_2025-01-01_data_.csv")),
             wind_path=_resolve_path(base_dir, inputs_payload.get("wind_path", "../data/Wind_2025_01-01_data_.csv")),
-            output_profile_path=_resolve_path(base_dir, inputs_payload.get("output_profile_path", "../data/seci_fdre_v_amendment_03_output_profile.csv")),
-            output_profile_18_22_path=_resolve_path(base_dir, inputs_payload.get("output_profile_18_22_path", "../data/seci_fdre_v_amendment_03_output_profile_18_22.csv")),
+            output_profile_path=_resolve_path(base_dir, inputs_payload.get("output_profile_path", "../data/seci_fdre_ii_revised_annexure_b_output_profile.csv")),
+            output_profile_18_22_path=_resolve_path(base_dir, inputs_payload.get("output_profile_18_22_path", "../data/seci_fdre_ii_revised_annexure_b_output_profile_18_22.csv")),
             aux_power_path=(
                 _resolve_path(base_dir, inputs_payload["aux_power_path"])
                 if inputs_payload.get("aux_power_path") not in (None, "")
                 else None
+            ),
+            generated_decimal_places=_normalize_generated_decimal_places(
+                inputs_payload.get("generated_decimal_places", DEFAULT_GENERATED_FILE_DECIMAL_PLACES)
             ),
         )
 
@@ -335,20 +369,39 @@ def _normalize_data_config(payload: dict[str, Any]) -> DataConfig:
 
 
 def _normalize_load_config(payload: dict[str, Any]) -> LoadConfig:
+    profile_mode = _normalize_profile_mode(payload.get("profile_mode", SECI_PROFILE_MODE))
     return LoadConfig(
         output_profile_kw=float(payload["output_profile_kw"]) if payload.get("output_profile_kw") not in (None, "") else None,
+        output_profile_18_22_kw=(
+            float(payload["output_profile_18_22_kw"])
+            if payload.get("output_profile_18_22_kw") not in (None, "")
+            else None
+        ),
         aux_consumption_kw=float(payload.get("aux_consumption_kw", 0.0)),
         aux_mode=str(payload.get("aux_mode", "static_csv")),
         aux_charge_fraction=float(payload["aux_charge_fraction"]) if payload.get("aux_charge_fraction") not in (None, "") else None,
         aux_discharge_fraction=float(payload["aux_discharge_fraction"]) if payload.get("aux_discharge_fraction") not in (None, "") else None,
         aux_idle_fraction=float(payload["aux_idle_fraction"]) if payload.get("aux_idle_fraction") not in (None, "") else None,
-        profile_mode=str(payload.get("profile_mode", "template")),
-        profile_template_id=str(payload["profile_template_id"]) if payload.get("profile_template_id") not in (None, "") else None,
+        profile_mode=profile_mode,
+        profile_template_id=_normalize_profile_template_id(payload.get("profile_template_id"), profile_mode),
         contracted_capacity_mw=float(payload["contracted_capacity_mw"]) if payload.get("contracted_capacity_mw") not in (None, "") else None,
         output_profile_path=str(payload["output_profile_path"]) if payload.get("output_profile_path") not in (None, "") else None,
         aux_power_path=str(payload["aux_power_path"]) if payload.get("aux_power_path") not in (None, "") else None,
         profile_multiplier=float(payload.get("profile_multiplier", 1.0)),
     )
+
+
+def _normalize_profile_mode(raw: Any) -> str:
+    mode = str(raw or SECI_PROFILE_MODE).strip().lower()
+    if mode == LEGACY_TEMPLATE_PROFILE_MODE:
+        return SECI_PROFILE_MODE
+    return mode
+
+
+def _normalize_profile_template_id(raw: Any, profile_mode: str) -> str | None:
+    if profile_mode == SECI_PROFILE_MODE:
+        return SECI_REVISED_ANNEXURE_B_TEMPLATE_ID
+    return str(raw) if raw not in (None, "") else None
 
 
 def _normalize_battery_config(payload: dict[str, Any]) -> BatteryConfig:
@@ -371,6 +424,21 @@ def _normalize_battery_config(payload: dict[str, Any]) -> BatteryConfig:
         charge_efficiency=float(normalized.get("charge_efficiency", 1.0 - charge_loss_table.get(1.0, 0.0))),
         discharge_efficiency=float(normalized.get("discharge_efficiency", 1.0 - discharge_loss_table.get(1.0, 0.0))),
     )
+
+
+def _normalize_generated_decimal_places(raw: Any) -> int:
+    if isinstance(raw, bool):
+        raise ValueError("inputs.generated_decimal_places must be a non-negative integer.")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("inputs.generated_decimal_places must be a non-negative integer.") from exc
+    if not value.is_integer():
+        raise ValueError("inputs.generated_decimal_places must be a non-negative integer.")
+    decimal_places = int(value)
+    if decimal_places < 0:
+        raise ValueError("inputs.generated_decimal_places must be a non-negative integer.")
+    return decimal_places
 
 
 def _normalize_loss_table(raw: dict[Any, Any]) -> dict[float, float]:

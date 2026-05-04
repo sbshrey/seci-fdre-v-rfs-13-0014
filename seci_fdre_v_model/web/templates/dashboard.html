@@ -207,8 +207,8 @@
           {% if not compliance_rows %}
             <p class="section-note">
               No monthly compliance table for this run. It is only written when the snapshot uses
-              <strong>template</strong> load mode (tender profile DFR blocks). If <code>simulation.load.profile_mode</code>
-              is <strong>flat</strong>, or the artifact <code>base_case_profile_compliance_monthly.csv</code> is missing
+              <strong>SECI</strong> load mode (tender profile DFR blocks). If <code>simulation.load.profile_mode</code>
+              is a generated or manual non-SECI mode, or the artifact <code>base_case_profile_compliance_monthly.csv</code> is missing
               from the run package, this panel stays empty.
             </p>
           {% endif %}

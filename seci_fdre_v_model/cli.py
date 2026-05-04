@@ -20,7 +20,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     generate_parser = subparsers.add_parser(
         "generate-input-files",
-        help="Generate tender-derived output profile and aux power files.",
+        help="Generate configured output profile and aux power files.",
     )
     generate_parser.add_argument("--config", required=True, help="Path to the project YAML configuration file.")
 

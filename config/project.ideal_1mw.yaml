@@ -32,6 +32,7 @@ inputs:
   wind_path: ../data/ideal/generated_wind_2025.csv
   output_profile_path: ../data/ideal/output_profile.csv
   output_profile_18_22_path: ../data/ideal/output_profile_18_22.csv
+  generated_decimal_places: 2
 
 simulation:
   data:
@@ -49,9 +50,10 @@ simulation:
     export_limit_kw: 1000.0
     import_limit_kw: 1500.0
   load:
-    profile_mode: template
-    profile_template_id: seci_fdre_v_amendment_03
+    profile_mode: seci
+    profile_template_id: seci_fdre_ii_revised_annexure_b
     contracted_capacity_mw: 1.0
+    output_profile_18_22_kw: 1000.0
     aux_mode: battery_state
     aux_charge_fraction: 0.03
     aux_discharge_fraction: 0.025

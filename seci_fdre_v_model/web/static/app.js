@@ -264,27 +264,38 @@ async function handleChartDatasetClick(event) {
 }
 
 function syncProfileModeFields(mode) {
-  const templateOnlyFields = document.querySelectorAll("[data-template-only]");
-  const flatOnlyFields = document.querySelectorAll("[data-flat-only]");
-  const templateLabels = document.querySelectorAll('[data-mode-field="template_only"]');
-  const flatLabels = document.querySelectorAll('[data-mode-field="flat_only"]');
+  const seciOnlyFields = document.querySelectorAll("[data-seci-only]");
+  const generatedProfileFields = document.querySelectorAll("[data-generated-profile-only]");
+  const manualProfileFields = document.querySelectorAll("[data-manual-profile-only]");
+  const seciLabels = document.querySelectorAll('[data-mode-field="seci_only"]');
+  const generatedLabels = document.querySelectorAll('[data-mode-field="generated_profile"]');
+  const manualLabels = document.querySelectorAll('[data-mode-field="manual_profile"]');
 
-  const isFlat = mode === "flat";
+  const isSeci = mode === "seci" || mode === "template";
+  const isGenerated = mode === "flat" || mode === "time_based_2h" || mode === "time_based_4h";
+  const isManual = mode === "manual";
 
-  templateOnlyFields.forEach((field) => {
-    field.disabled = isFlat;
+  seciOnlyFields.forEach((field) => {
+    field.disabled = !isSeci;
   });
-  flatOnlyFields.forEach((field) => {
-    field.disabled = !isFlat;
+  generatedProfileFields.forEach((field) => {
+    field.disabled = !isGenerated;
+  });
+  manualProfileFields.forEach((field) => {
+    field.disabled = !isManual;
   });
 
-  templateLabels.forEach((label) => {
-    label.classList.toggle("mode-field-disabled", isFlat);
-    label.classList.toggle("mode-field-active", !isFlat);
+  seciLabels.forEach((label) => {
+    label.classList.toggle("mode-field-disabled", !isSeci);
+    label.classList.toggle("mode-field-active", isSeci);
   });
-  flatLabels.forEach((label) => {
-    label.classList.toggle("mode-field-disabled", !isFlat);
-    label.classList.toggle("mode-field-active", isFlat);
+  generatedLabels.forEach((label) => {
+    label.classList.toggle("mode-field-disabled", !isGenerated);
+    label.classList.toggle("mode-field-active", isGenerated);
+  });
+  manualLabels.forEach((label) => {
+    label.classList.toggle("mode-field-disabled", !isManual);
+    label.classList.toggle("mode-field-active", isManual);
   });
 }
 

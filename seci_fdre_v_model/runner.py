@@ -42,7 +42,7 @@ def run_full_study(
         if progress_callback is not None:
             progress_callback(stage, round(pct, 1), detail)
 
-    emit("Generate inputs", 0, "Generating tender-derived profile inputs")
+    emit("Generate inputs", 0, "Generating profile inputs")
     generate_tender_input_files(config)
 
     target_dir = _resolve_package_dir(config, package_dir)

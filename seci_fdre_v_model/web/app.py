@@ -77,8 +77,11 @@ CONFIG_SELECT_OPTIONS = {
         ("float64", "float64"),
     ],
     "simulation.load.profile_mode": [
-        ("template", "Template"),
         ("flat", "Flat"),
+        ("time_based_2h", "Time Based - 2 Hours"),
+        ("time_based_4h", "Time Based - 4 Hours"),
+        ("seci", "SECI"),
+        ("manual", "Manual"),
     ],
     "simulation.load.aux_mode": [
         ("battery_state", "Battery State"),
@@ -350,10 +353,15 @@ def create_app(
     def config_page() -> str:
         state = workspace()
         project = load_project_config(state)
+        output_profile_input = next(
+            (item for item in list_managed_inputs(state) if item.key == "output_profile"),
+            None,
+        )
         return render_template(
             "config.html",
             active_page="config",
             project=project,
+            output_profile_input=output_profile_input,
             select_options=CONFIG_SELECT_OPTIONS,
         )
 
@@ -362,7 +370,15 @@ def create_app(
         state = workspace()
         try:
             save_project_form(state, request.form.to_dict())
-            flash("Configuration saved.", "success")
+            upload = request.files.get("manual_output_profile_file")
+            uploaded = False
+            if upload is not None and getattr(upload, "filename", ""):
+                store_uploaded_input(state, "output_profile", upload)
+                uploaded = True
+            flash(
+                "Configuration saved and output profile uploaded." if uploaded else "Configuration saved.",
+                "success",
+            )
         except Exception as exc:
             flash(f"Failed to save configuration: {exc}", "error")
         return redirect(url_for("config_page"))
@@ -386,7 +402,7 @@ def create_app(
             flash("Input file uploaded.", "success")
         except Exception as exc:
             flash(f"Upload failed: {exc}", "error")
-        return redirect(url_for("inputs_page"))
+        return redirect(request.referrer or url_for("inputs_page"))
 
     @app.get("/inputs/download/<input_key>")
     def download_input(input_key: str) -> Response:
@@ -402,7 +418,7 @@ def create_app(
         state = workspace()
         try:
             generate_active_inputs(state)
-            flash("Tender-derived input files generated in the workspace.", "success")
+            flash("Input files generated in the workspace.", "success")
         except Exception as exc:
             flash(f"Failed to generate input files: {exc}", "error")
         return redirect(request.referrer or url_for("inputs_page"))

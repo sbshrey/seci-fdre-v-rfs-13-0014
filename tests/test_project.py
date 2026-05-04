@@ -76,6 +76,8 @@ def test_evening_profile_file_is_nonzero_only_between_18_and_22(tmp_path: Path) 
         tmp_path,
         simulation_start="2025-01-01 17:58",
         simulation_end="2025-01-01 22:01",
+        profile_mode="flat",
+        output_profile_kw=100.0,
     )
     project = ProjectConfig.from_yaml(config_path)
 
@@ -93,7 +95,156 @@ def test_evening_profile_file_is_nonzero_only_between_18_and_22(tmp_path: Path) 
         .to_list()
     )
     assert nonzero_hours == [18, 19, 20, 21]
+    assert (
+        evening_df.filter(pl.col("output_profile_18_22_kw") > 0)
+        .get_column("output_profile_18_22_kw")
+        .unique()
+        .sort()
+        .to_list()
+    ) == [100.0]
     assert evening_df.filter(pl.col("hour").is_between(0, 17)).select(pl.col("output_profile_18_22_kw").sum()).item() == 0.0
+
+
+def test_evening_profile_file_uses_output_profile_kw_for_flat_mode(tmp_path: Path) -> None:
+    config_path = _write_project_config(
+        tmp_path,
+        simulation_start="2025-01-01 17:58",
+        simulation_end="2025-01-01 22:01",
+        profile_mode="flat",
+        output_profile_kw=100.0,
+    )
+    project = ProjectConfig.from_yaml(config_path)
+
+    generate_tender_input_files(project)
+    evening_df = pl.read_csv(project.inputs.output_profile_18_22_path, try_parse_dates=True).with_columns(
+        pl.col("timestamp").dt.hour().alias("hour")
+    )
+
+    assert (
+        evening_df.filter(pl.col("hour").is_between(18, 21, closed="both"))
+        .get_column("output_profile_18_22_kw")
+        .unique()
+        .sort()
+        .to_list()
+    ) == [100.0]
+    assert evening_df.filter(pl.col("hour") == 22).select(pl.col("output_profile_18_22_kw").sum()).item() == 0.0
+
+
+def test_seci_profile_is_normalized_to_active_input_generation_energy(tmp_path: Path) -> None:
+    config_path = _write_project_config(
+        tmp_path,
+        simulation_start="2025-01-01 00:00",
+        simulation_end="2025-01-01 00:05",
+        solar_rows=[
+            ["01/01/2025 00:00", "10"],
+            ["01/01/2025 00:01", "20"],
+            ["01/01/2025 00:02", "30"],
+            ["01/01/2025 00:03", "40"],
+            ["01/01/2025 00:04", "50"],
+            ["01/01/2025 00:05", "60"],
+        ],
+        wind_rows=[
+            ["2025-01-01 00:00", "1"],
+            ["2025-01-01 00:01", "2"],
+            ["2025-01-01 00:02", "3"],
+            ["2025-01-01 00:03", "4"],
+            ["2025-01-01 00:04", "5"],
+            ["2025-01-01 00:05", "6"],
+        ],
+    )
+    project = ProjectConfig.from_yaml(config_path)
+
+    generate_tender_input_files(project)
+    output_df = pl.read_csv(project.inputs.output_profile_path, try_parse_dates=True)
+
+    assert output_df["output_profile_kw"].sum() / 60.0 == pytest.approx((210.0 + 21.0) / 60.0)
+
+
+def test_time_based_profile_uses_output_profile_kw_for_selected_window(tmp_path: Path) -> None:
+    config_path = _write_project_config(
+        tmp_path,
+        simulation_start="2025-01-01 17:59",
+        simulation_end="2025-01-01 20:01",
+        profile_mode="time_based_2h",
+        output_profile_kw=70.0,
+    )
+    project = ProjectConfig.from_yaml(config_path)
+
+    generate_tender_input_files(project)
+    output_df = pl.read_csv(project.inputs.output_profile_path, try_parse_dates=True).with_columns(
+        pl.col("timestamp").dt.hour().alias("hour")
+    )
+
+    assert output_df.filter(pl.col("hour").is_in([18, 19]))["output_profile_kw"].to_list() == [70.0] * 120
+    assert output_df.filter(pl.col("hour").is_in([17, 20]))["output_profile_kw"].sum() == 0.0
+
+
+def test_generated_csvs_default_to_two_decimal_places(tmp_path: Path) -> None:
+    config_path = _write_project_config(
+        tmp_path,
+        simulation_start="2025-01-01 18:00",
+        simulation_end="2025-01-01 18:00",
+        profile_mode="flat",
+        output_profile_kw=12.3456,
+        output_profile_18_22_kw=23.4567,
+        aux_consumption_kw=6.7891,
+    )
+    project = ProjectConfig.from_yaml(config_path)
+
+    generate_tender_input_files(project)
+
+    assert _first_csv_row(project.inputs.output_profile_path)["output_profile_kw"] == "12.35"
+    assert _first_csv_row(project.inputs.output_profile_18_22_path)["output_profile_18_22_kw"] == "12.35"
+    assert _first_csv_row(project.inputs.aux_power_path)["aux_power_kw"] == "6.79"
+
+
+def test_generated_csv_decimal_places_can_be_configured(tmp_path: Path) -> None:
+    config_path = _write_project_config(
+        tmp_path,
+        simulation_start="2025-01-01 18:00",
+        simulation_end="2025-01-01 18:00",
+        profile_mode="flat",
+        output_profile_kw=12.3456,
+        output_profile_18_22_kw=23.4567,
+        aux_consumption_kw=6.7891,
+        generated_decimal_places=3,
+    )
+    project = ProjectConfig.from_yaml(config_path)
+
+    generate_tender_input_files(project)
+
+    assert project.inputs.generated_decimal_places == 3
+    assert _first_csv_row(project.inputs.output_profile_path)["output_profile_kw"] == "12.346"
+    assert _first_csv_row(project.inputs.output_profile_18_22_path)["output_profile_18_22_kw"] == "12.346"
+    assert _first_csv_row(project.inputs.aux_power_path)["aux_power_kw"] == "6.789"
+
+
+def test_manual_profile_mode_keeps_uploaded_output_profile(tmp_path: Path) -> None:
+    config_path = _write_project_config(
+        tmp_path,
+        simulation_start="2025-01-01 18:00",
+        simulation_end="2025-01-01 22:00",
+        profile_mode="manual",
+    )
+    manual_profile = tmp_path / "output_profile.csv"
+    _write_csv(
+        manual_profile,
+        ["timestamp", "output_profile_kw"],
+        [
+            ["2025-01-01 18:00", "11"],
+            ["2025-01-01 19:00", "22"],
+            ["2025-01-01 22:00", "33"],
+        ],
+    )
+    project = ProjectConfig.from_yaml(config_path)
+
+    written = generate_tender_input_files(project)
+    output_df = pl.read_csv(project.inputs.output_profile_path, try_parse_dates=True)
+    evening_df = pl.read_csv(project.inputs.output_profile_18_22_path, try_parse_dates=True)
+
+    assert project.inputs.output_profile_path not in written
+    assert output_df["output_profile_kw"].to_list() == [11, 22, 33]
+    assert evening_df["output_profile_18_22_kw"].to_list() == [11.0, 22.0, 0.0]
 
 
 def test_cli_generate_and_run_workflow(tmp_path: Path) -> None:
@@ -241,8 +392,9 @@ def _write_project_config(
     *,
     simulation_start: str = "2025-01-01 00:00",
     simulation_end: str = "2025-01-01 00:05",
-    profile_mode: str = "template",
+    profile_mode: str = "seci",
     output_profile_kw: float | None = None,
+    output_profile_18_22_kw: float | None = None,
     aux_mode: str = "static_csv",
     include_aux_power_path: bool = True,
     aux_consumption_kw: float = 10.0,
@@ -252,6 +404,7 @@ def _write_project_config(
     solar_rows: list[list[str]] | None = None,
     wind_rows: list[list[str]] | None = None,
     sensitivity_singleton: bool = False,
+    generated_decimal_places: int | None = None,
 ) -> Path:
     solar_path = tmp_path / "solar.csv"
     wind_path = tmp_path / "wind.csv"
@@ -289,6 +442,8 @@ def _write_project_config(
         f"  output_profile_path: {tmp_path / 'output_profile.csv'}",
         f"  output_profile_18_22_path: {tmp_path / 'output_profile_18_22.csv'}",
     ]
+    if generated_decimal_places is not None:
+        inputs_lines.append(f"  generated_decimal_places: {generated_decimal_places}")
     if include_aux_power_path:
         inputs_lines.append(f"  aux_power_path: {tmp_path / 'aux_power.csv'}")
 
@@ -296,15 +451,17 @@ def _write_project_config(
         "  load:",
         f"    profile_mode: {profile_mode}",
     ]
-    if profile_mode == "template":
+    if profile_mode in {"seci", "template"}:
         load_lines.extend(
             [
-                "    profile_template_id: seci_fdre_v_amendment_03",
+                "    profile_template_id: seci_fdre_ii_revised_annexure_b",
                 "    contracted_capacity_mw: 0.1",
             ]
         )
-    else:
+    elif profile_mode != "manual":
         load_lines.append(f"    output_profile_kw: {float(output_profile_kw or 0.0)}")
+    if output_profile_18_22_kw is not None:
+        load_lines.append(f"    output_profile_18_22_kw: {float(output_profile_18_22_kw)}")
 
     if aux_mode == "battery_state":
         load_lines.extend(
@@ -388,6 +545,11 @@ def _write_csv(path: Path, header: list[str], rows: list[list[str]]) -> None:
         writer = csv.writer(handle)
         writer.writerow(header)
         writer.writerows(rows)
+
+
+def _first_csv_row(path: Path) -> dict[str, str]:
+    with path.open("r", newline="", encoding="utf-8") as handle:
+        return next(csv.DictReader(handle))
 
 
 def _sheet_names(workbook_path: Path) -> list[str]:

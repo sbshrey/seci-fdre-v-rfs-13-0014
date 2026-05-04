@@ -22,7 +22,7 @@ import polars as pl
 import yaml
 
 from seci_fdre_v_model.aligned_energy_report import suggest_alignment_scales, summarize_aligned_inputs
-from seci_fdre_v_model.config import ProjectConfig
+from seci_fdre_v_model.config import DEFAULT_GENERATED_FILE_DECIMAL_PLACES, ProjectConfig
 from seci_fdre_v_model.ideal_year_profiles import write_tiled_year_profiles
 from seci_fdre_v_model.runtime import bundled_root, repo_root, resolve_seed_source_config_path
 from seci_fdre_v_model.data.loaders import (
@@ -34,7 +34,7 @@ from seci_fdre_v_model.data.loaders import (
     WIND_TIMESTAMP_COLUMN,
 )
 from seci_fdre_v_model.runner import run_full_study
-from seci_fdre_v_model.tender_inputs import generate_tender_input_files
+from seci_fdre_v_model.tender_inputs import generate_static_aux_power_file, generate_tender_input_files
 from seci_fdre_v_model.web.models import (
     ChartCard,
     EnergyTableRow,
@@ -82,7 +82,7 @@ MANAGED_INPUT_SPECS: tuple[ManagedInputSpec, ...] = (
         key="output_profile",
         label="Output Profile",
         canonical_name="output_profile.csv",
-        description="Tender-derived or uploaded output profile.",
+        description="Generated or uploaded output profile.",
         expected_headers=("timestamp", PROFILE_POWER_COLUMN),
         generated=True,
     ),
@@ -90,7 +90,7 @@ MANAGED_INPUT_SPECS: tuple[ManagedInputSpec, ...] = (
         key="output_profile_18_22",
         label="Output Profile 18-22",
         canonical_name="output_profile_18_22.csv",
-        description="Evening-only tender profile derived from the main output profile.",
+        description="Evening-only profile with the configured constant kW value from 18:00 to 22:00.",
         expected_headers=("timestamp", "output_profile_18_22_kw"),
         generated=True,
     ),
@@ -114,6 +114,7 @@ BOOL_KEYS = {
 FLOAT_KEYS = {
     "simulation.grid.export_limit_kw",
     "simulation.load.output_profile_kw",
+    "simulation.load.output_profile_18_22_kw",
     "simulation.load.aux_consumption_kw",
     "simulation.load.aux_charge_fraction",
     "simulation.load.aux_discharge_fraction",
@@ -131,9 +132,10 @@ FLOAT_KEYS = {
 NULLABLE_FLOAT_KEYS = {
     "simulation.grid.import_limit_kw",
     "simulation.load.output_profile_kw",
+    "simulation.load.output_profile_18_22_kw",
     "simulation.load.contracted_capacity_mw",
 }
-INT_KEYS = {"simulation.preprocessing.max_interpolation_gap_minutes"}
+INT_KEYS = {"inputs.generated_decimal_places", "simulation.preprocessing.max_interpolation_gap_minutes"}
 LIST_FLOAT_KEYS = {
     "sensitivity.wind_multipliers",
     "sensitivity.solar_multipliers",
@@ -215,6 +217,7 @@ def config_form_api_values(project: ProjectConfig) -> dict[str, Any]:
         return ", ".join(str(v) for v in values)
 
     return {
+        "inputs.generated_decimal_places": project.inputs.generated_decimal_places,
         "project.plant_name": proj.plant_name,
         "project.simulation_start": proj.simulation_start.strftime("%Y-%m-%d %H:%M"),
         "project.simulation_end": proj.simulation_end.strftime("%Y-%m-%d %H:%M"),
@@ -234,6 +237,9 @@ def config_form_api_values(project: ProjectConfig) -> dict[str, Any]:
         if load.contracted_capacity_mw is None
         else load.contracted_capacity_mw,
         "simulation.load.output_profile_kw": "" if load.output_profile_kw is None else load.output_profile_kw,
+        "simulation.load.output_profile_18_22_kw": ""
+        if load.output_profile_18_22_kw is None
+        else load.output_profile_18_22_kw,
         "simulation.load.aux_consumption_kw": load.aux_consumption_kw,
         "simulation.load.aux_charge_fraction": ""
         if load.aux_charge_fraction is None
@@ -621,6 +627,7 @@ def create_run_snapshot(
 ) -> tuple[str, Path, Path, Path]:
     """Create an immutable run snapshot of the current inputs and selected study YAML profile."""
     payload = study_config_payload_for_snapshot(state, study_profile)
+    _ensure_static_aux_power_input(state, project_config_for_study_profile_preview(state, study_profile))
     run_id = _new_run_id()
     run_dir = state.runs_dir / run_id
     run_config_dir = run_dir / "config"
@@ -641,13 +648,17 @@ def create_run_snapshot(
 
     snapshot_payload = deepcopy(payload)
     snapshot_payload["project"]["output_dir"] = "../package"
-    snapshot_payload["inputs"] = {
-        "solar_path": "../inputs/solar.csv",
-        "wind_path": "../inputs/wind.csv",
-        "output_profile_path": "../inputs/output_profile.csv",
-        "output_profile_18_22_path": "../inputs/output_profile_18_22.csv",
-        "aux_power_path": "../inputs/aux_power.csv",
-    }
+    snapshot_inputs = deepcopy(snapshot_payload.get("inputs") or {})
+    snapshot_inputs.update(
+        {
+            "solar_path": "../inputs/solar.csv",
+            "wind_path": "../inputs/wind.csv",
+            "output_profile_path": "../inputs/output_profile.csv",
+            "output_profile_18_22_path": "../inputs/output_profile_18_22.csv",
+            "aux_power_path": "../inputs/aux_power.csv",
+        }
+    )
+    snapshot_payload["inputs"] = snapshot_inputs
     config_path = run_config_dir / "project.yaml"
     _write_validated_config(config_path, snapshot_payload)
     _write_run_json(
@@ -665,6 +676,26 @@ def create_run_snapshot(
         },
     )
     return run_id, run_dir, config_path, package_dir
+
+
+def _ensure_static_aux_power_input(state: WorkspaceState, project: ProjectConfig) -> None:
+    if not project.simulation.load.uses_static_aux or project.inputs.aux_power_path is None:
+        return
+    if project.inputs.aux_power_path.exists():
+        return
+    generated_path = generate_static_aux_power_file(project)
+    if generated_path is None:
+        return
+    metadata = _load_metadata(state)
+    metadata.setdefault("aux_power", {})
+    metadata["aux_power"].update(
+        {
+            "original_name": f"generated:{generated_path.name}",
+            "source": "generated",
+            "updated_at": _iso_now(),
+        }
+    )
+    _save_metadata(state, metadata)
 
 
 def run_study(
@@ -1440,6 +1471,7 @@ def _normalize_workspace_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "aux_power_path": "../inputs/aux_power.csv",
         }
     )
+    normalized["inputs"].setdefault("generated_decimal_places", DEFAULT_GENERATED_FILE_DECIMAL_PLACES)
     return normalized
 
 
