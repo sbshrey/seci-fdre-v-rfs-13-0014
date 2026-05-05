@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -66,6 +67,10 @@ def run_full_study(
 
     emit("Writing outputs", 36, "Writing study summary tables")
     pl.DataFrame([base_result.summary_metrics]).write_csv(target_dir / "base_summary.csv")
+    # Drop the minute-level base result before sensitivity cases to keep web deployments
+    # within modest instance memory limits.
+    del base_result
+    gc.collect()
 
     emit("Sensitivity cases", 40, "Running named sensitivity cases")
     case_rows = build_case_rows(
@@ -73,6 +78,8 @@ def run_full_study(
         progress_callback=_scenario_progress(emit, "Sensitivity cases", 40, 62),
     )
     pl.DataFrame(case_rows).write_csv(target_dir / "cases_table.csv")
+    del case_rows
+    gc.collect()
 
     emit("Sensitivity cross", 64, "Running sensitivity cross table")
     cross_rows = build_cross_table_rows(
@@ -80,6 +87,8 @@ def run_full_study(
         progress_callback=_scenario_progress(emit, "Sensitivity cross", 64, 92),
     )
     pl.DataFrame(cross_rows).write_csv(target_dir / "sensitivity_cross_table.csv")
+    del cross_rows
+    gc.collect()
     _build_profile_index(config).write_csv(target_dir / "profile_files_index.csv")
 
     workbook_output = target_dir / f"{package_name}.xlsx"

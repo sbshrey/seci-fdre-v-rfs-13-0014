@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+import multiprocessing
 import os
+import threading
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from itertools import product
 from typing import Callable, cast
@@ -11,6 +14,7 @@ from seci_fdre_v_model.config import ProjectConfig
 from seci_fdre_v_model.core.pipeline import simulate_system
 
 ScenarioProgressCallback = Callable[[int, int, str], None]
+_scenario_logger = logging.getLogger("seci_fdre_v_model.scenarios")
 
 
 def _resolve_scenario_workers() -> int:
@@ -33,6 +37,14 @@ def _resolve_scenario_workers() -> int:
     if n < 1:
         return auto
     return min(n, 32)
+
+
+def _env_requests_auto_workers() -> bool:
+    return os.environ.get("SECI_FDRE_V_SCENARIO_WORKERS", "").strip().lower() in {"", "auto"}
+
+
+def _running_in_background_thread() -> bool:
+    return threading.current_thread() is not threading.main_thread()
 
 
 def _simulate_scenario_worker(
@@ -186,6 +198,12 @@ def _run_scenarios(
 ) -> list[dict[str, float | str | int | None]]:
     total = len(scenarios)
     workers = _resolve_scenario_workers()
+    if _running_in_background_thread() and _env_requests_auto_workers():
+        _scenario_logger.warning(
+            "Sensitivity scenarios requested from a background thread; forcing sequential execution "
+            "to avoid ProcessPoolExecutor hangs. Set SECI_FDRE_V_SCENARIO_WORKERS explicitly to override."
+        )
+        workers = 1
     if workers <= 1 or total <= 1:
         return _run_scenarios_sequential(config, scenarios, progress_callback=progress_callback)
 
@@ -193,7 +211,15 @@ def _run_scenarios(
         progress_callback(0, total, str(scenarios[0]["case_id"]))
 
     rows: list[dict[str, float | str | int | None] | None] = [None] * total
-    executor = ProcessPoolExecutor(max_workers=workers)
+    executor_kwargs: dict[str, object] = {"max_workers": workers}
+    if _running_in_background_thread():
+        _scenario_logger.warning(
+            "Sensitivity scenarios requested from a background thread with SECI_FDRE_V_SCENARIO_WORKERS=%s; "
+            "using multiprocessing spawn context.",
+            workers,
+        )
+        executor_kwargs["mp_context"] = multiprocessing.get_context("spawn")
+    executor = ProcessPoolExecutor(**executor_kwargs)
     abnormal = True
     try:
         future_to_index = {

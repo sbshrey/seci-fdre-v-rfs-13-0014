@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import hmac
 import logging
+import os
 import re
 import threading
 from dataclasses import replace
@@ -23,6 +25,7 @@ from flask import (
     session,
     url_for,
 )
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from seci_fdre_v_model.profile_templates import SUPPORTED_TENDER_PROFILES
 from seci_fdre_v_model.runtime import bundled_root
@@ -65,6 +68,9 @@ from seci_fdre_v_model.web.services import (
 )
 
 _study_logger = logging.getLogger("seci_fdre_v_model.web.study")
+_web_logger = logging.getLogger("seci_fdre_v_model.web")
+BASIC_AUTH_SESSION_KEY = "_basic_auth_authenticated"
+BASIC_AUTH_LOGGED_OUT_KEY = "_basic_auth_logged_out"
 
 CONFIG_SELECT_OPTIONS = {
     "simulation.preprocessing.frequency": [("1m", "1 minute")],
@@ -298,9 +304,25 @@ def create_app(
         template_folder=str(web_root / "templates"),
         static_folder=str(web_root / "static"),
     )
-    app.config["SECRET_KEY"] = "seci-fdre-v-local"
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+    secret_key = os.environ.get("SECI_FDRE_V_SECRET_KEY") or "seci-fdre-v-local"
+    if secret_key == "seci-fdre-v-local":
+        _web_logger.warning("SECI_FDRE_V_SECRET_KEY is not set; using the local development fallback.")
+    app.config["SECRET_KEY"] = secret_key
     app.config["WORKSPACE_ROOT"] = str(workspace_root) if workspace_root is not None else None
     app.config["SOURCE_CONFIG_PATH"] = str(source_config_path) if source_config_path is not None else None
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_SECURE"] = _env_flag("SECI_FDRE_V_SECURE_COOKIES")
+
+    basic_auth_user = os.environ.get("SECI_FDRE_V_BASIC_AUTH_USER") or ""
+    basic_auth_password = os.environ.get("SECI_FDRE_V_BASIC_AUTH_PASSWORD") or ""
+    basic_auth_enabled = bool(basic_auth_user and basic_auth_password)
+    if (basic_auth_user or basic_auth_password) and not basic_auth_enabled:
+        _web_logger.warning(
+            "Basic auth is partially configured; set both SECI_FDRE_V_BASIC_AUTH_USER and "
+            "SECI_FDRE_V_BASIC_AUTH_PASSWORD to enable it."
+        )
 
     def workspace():
         return ensure_workspace_ready(
@@ -310,6 +332,51 @@ def create_app(
 
     job_manager = StudyJobManager(workspace)
 
+    def valid_basic_credentials(username: str, password: str) -> bool:
+        return hmac.compare_digest(username, basic_auth_user) and hmac.compare_digest(password, basic_auth_password)
+
+    def valid_basic_auth() -> bool:
+        auth = request.authorization
+        return bool(auth and auth.type.lower() == "basic" and valid_basic_credentials(auth.username or "", auth.password or ""))
+
+    def basic_auth_challenge(message: str = "Authentication required.") -> Response:
+        return Response(
+            message,
+            401,
+            {"WWW-Authenticate": 'Basic realm="SECI FDRE-V", charset="UTF-8"'},
+        )
+
+    def login_redirect_or_challenge() -> Response:
+        if request.path.startswith("/api/"):
+            return basic_auth_challenge()
+        return redirect(url_for("login"))
+
+    @app.before_request
+    def require_basic_auth() -> Response | None:
+        if not basic_auth_enabled:
+            return None
+        if request.endpoint in {"health", "login", "logout", "static"}:
+            return None
+        if session.get(BASIC_AUTH_LOGGED_OUT_KEY):
+            return login_redirect_or_challenge()
+        if session.get(BASIC_AUTH_SESSION_KEY):
+            return None
+        if valid_basic_auth():
+            session[BASIC_AUTH_SESSION_KEY] = True
+            return None
+        return login_redirect_or_challenge()
+
+    @app.after_request
+    def apply_security_headers(response: Response) -> Response:
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+        response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        response.headers.setdefault("Content-Security-Policy", "base-uri 'self'; frame-ancestors 'none'; object-src 'none'")
+        if request.is_secure:
+            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        return response
+
     @app.context_processor
     def inject_nav_context() -> dict[str, Any]:
         state = workspace()
@@ -318,12 +385,39 @@ def create_app(
             "workspace_root": str(state.root),
             "current_job": job_manager.current_job(),
             "selected_study_profile": selected,
+            "auth_enabled": basic_auth_enabled,
         }
 
     @app.get("/health")
     @app.get("/api/health")
     def health() -> Response:
         return jsonify({"status": "ok"})
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login() -> str | Response:
+        if not basic_auth_enabled:
+            return redirect(url_for("index"))
+        if request.method == "POST":
+            username = request.form.get("username", "")
+            password = request.form.get("password", "")
+            if valid_basic_credentials(username, password):
+                session.pop(BASIC_AUTH_LOGGED_OUT_KEY, None)
+                session[BASIC_AUTH_SESSION_KEY] = True
+                return redirect(url_for("index"))
+            return render_template("login.html", error="Invalid username or password."), 401
+        if session.get(BASIC_AUTH_SESSION_KEY) and not session.get(BASIC_AUTH_LOGGED_OUT_KEY):
+            session.pop(BASIC_AUTH_LOGGED_OUT_KEY, None)
+            return redirect(url_for("index"))
+        return render_template("login.html", error=None)
+
+    @app.post("/logout")
+    def logout() -> Response:
+        session.clear()
+        if basic_auth_enabled:
+            session[BASIC_AUTH_LOGGED_OUT_KEY] = True
+            return redirect(url_for("login"))
+        flash("Logged out.", "success")
+        return redirect(url_for("index"))
 
     @app.get("/api/config-form-preview")
     def api_config_form_preview() -> Response:
@@ -696,6 +790,11 @@ def _safe_call(fn: Any, *, default: Any) -> Any:
         return fn()
     except Exception:
         return default
+
+
+def _env_flag(name: str) -> bool:
+    value = os.environ.get(name, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def main(argv: Sequence[str] | None = None) -> int:

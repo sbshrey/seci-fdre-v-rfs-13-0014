@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import csv
 import io
 import json
@@ -179,6 +180,74 @@ def test_web_control_room_flow(tmp_path: Path) -> None:
     artifact_response = client.get(f"/runs/{run_id}/artifacts/base_summary.csv")
     assert artifact_response.status_code == 200
     assert b"plant_name" in artifact_response.data
+
+
+def test_logout_clears_session_and_redirects(tmp_path: Path) -> None:
+    source_config = _write_project_config(tmp_path)
+    app = create_app(workspace_root=tmp_path / ".workspace", source_config_path=source_config)
+    client = app.test_client()
+
+    with client.session_transaction() as session:
+        session["study_profile"] = "ideal_1mw"
+
+    assert b"Log out" not in client.get("/config").data
+    response = client.post("/logout", follow_redirects=True)
+
+    assert response.status_code == 200
+    assert b"Logged out." in response.data
+    with client.session_transaction() as session:
+        assert "study_profile" not in session
+
+
+def test_login_form_and_logout_redirect(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SECI_FDRE_V_BASIC_AUTH_USER", "operator")
+    monkeypatch.setenv("SECI_FDRE_V_BASIC_AUTH_PASSWORD", "secret")
+    source_config = _write_project_config(tmp_path)
+    app = create_app(workspace_root=tmp_path / ".workspace", source_config_path=source_config)
+    client = app.test_client()
+    auth_value = base64.b64encode(b"operator:secret").decode("ascii")
+    auth_header = {"Authorization": f"Basic {auth_value}"}
+
+    login_page = client.get("/login")
+    assert login_page.status_code == 200
+    assert b'name="username"' in login_page.data
+    assert b'name="password"' in login_page.data
+
+    redirect_response = client.get("/config")
+    assert redirect_response.status_code == 302
+    assert redirect_response.headers["Location"] == "/login"
+
+    invalid_response = client.post("/login", data={"username": "operator", "password": "wrong"})
+    assert invalid_response.status_code == 401
+    assert b"Invalid username or password." in invalid_response.data
+
+    form_login_response = client.post("/login", data={"username": "operator", "password": "secret"})
+    assert form_login_response.status_code == 302
+    assert form_login_response.headers["Location"] == "/"
+    config_response = client.get("/config")
+    assert config_response.status_code == 200
+    assert b"Log out" in config_response.data
+
+    client.post("/logout")
+    cached_auth_response = client.get("/config", headers=auth_header)
+    assert cached_auth_response.status_code == 302
+    assert cached_auth_response.headers["Location"] == "/login"
+
+    login_response = client.post("/login", data={"username": "operator", "password": "secret"})
+    assert login_response.status_code == 302
+    assert client.get("/config").status_code == 200
+
+
+def test_basic_auth_header_initial_access(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SECI_FDRE_V_BASIC_AUTH_USER", "operator")
+    monkeypatch.setenv("SECI_FDRE_V_BASIC_AUTH_PASSWORD", "secret")
+    source_config = _write_project_config(tmp_path)
+    app = create_app(workspace_root=tmp_path / ".workspace", source_config_path=source_config)
+    client = app.test_client()
+    auth_value = base64.b64encode(b"operator:secret").decode("ascii")
+    auth_header = {"Authorization": f"Basic {auth_value}"}
+
+    assert client.get("/config", headers=auth_header).status_code == 200
 
 
 def test_single_background_job_cancel_and_delete(tmp_path: Path, monkeypatch) -> None:
