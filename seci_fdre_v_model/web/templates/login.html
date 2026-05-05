@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sign in | SECI FDRE-V Control Room</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  </head>
+  <body class="login-page">
+    <main class="login-shell">
+      <section class="login-panel">
+        <p class="eyebrow">Control Room</p>
+        <h1>SECI FDRE-V</h1>
+        <form method="post" action="{{ url_for('login') }}" class="login-form">
+          <label>
+            <span>Username</span>
+            <input name="username" autocomplete="username" required autofocus>
+          </label>
+          <label>
+            <span>Password</span>
+            <input name="password" type="password" autocomplete="current-password" required>
+          </label>
+          {% if error %}
+            <p class="login-error">{{ error }}</p>
+          {% endif %}
+          <button class="button" type="submit">Sign in</button>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

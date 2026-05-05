@@ -1,0 +1,14 @@
+.elasticbeanstalk/
+.git
+.gitignore
+.pytest_cache/
+.venv/
+.workspace/
+__pycache__/
+*.pyc
+seci_fdre_v_model.egg-info/
+docs/
+release/
+scripts/
+tests/
+docker-compose.yml

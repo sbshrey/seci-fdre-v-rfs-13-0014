@@ -81,21 +81,84 @@ a {
   gap: 0.75rem;
 }
 
-.topnav a {
+.topnav form {
+  margin: 0;
+}
+
+.topnav a,
+.nav-button {
   padding: 0.65rem 0.95rem;
   border-radius: 999px;
   font-weight: 600;
 }
 
 .topnav a.active,
-.topnav a:hover {
+.topnav a:hover,
+.nav-button:hover {
   background: var(--brand-soft);
   color: var(--brand);
+}
+
+.nav-button {
+  border: 1px solid var(--line);
+  background: #ffffff;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
 }
 
 .page-shell {
   padding: 1.5rem;
   max-width: 100%;
+}
+
+.login-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+}
+
+.login-shell {
+  width: min(100%, 28rem);
+  padding: 1.25rem;
+}
+
+.login-panel {
+  padding: 1.5rem;
+  background: var(--panel);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+
+.login-panel h1 {
+  margin: 0 0 1.25rem;
+  font-size: 1.8rem;
+}
+
+.login-form {
+  display: grid;
+  gap: 1rem;
+}
+
+.login-form label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 700;
+}
+
+.login-form input {
+  width: 100%;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font: inherit;
+}
+
+.login-error {
+  margin: 0;
+  color: var(--danger);
+  font-weight: 700;
 }
 
 .page-header,

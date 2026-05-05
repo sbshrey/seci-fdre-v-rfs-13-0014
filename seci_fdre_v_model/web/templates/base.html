@@ -18,6 +18,11 @@
         <a href="{{ url_for('config_page') }}" class="{% if active_page == 'config' %}active{% endif %}">Config</a>
         <a href="{{ url_for('inputs_page') }}" class="{% if active_page == 'inputs' %}active{% endif %}">Inputs</a>
         <a href="{{ url_for('runs_page') }}" class="{% if active_page == 'runs' %}active{% endif %}">History</a>
+        {% if auth_enabled %}
+        <form method="post" action="{{ url_for('logout') }}">
+          <button class="nav-button" type="submit">Log out</button>
+        </form>
+        {% endif %}
       </nav>
     </header>
 
