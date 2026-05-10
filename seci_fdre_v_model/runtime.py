@@ -19,6 +19,9 @@ def bundled_root() -> Path:
 
 
 def resolve_seed_source_config_path() -> Path:
+    env_path = os.environ.get("SECI_FDRE_V_SOURCE_CONFIG")
+    if env_path:
+        return Path(env_path).expanduser().resolve()
     return (bundled_root() / "config" / "project.yaml").resolve()
 
 
