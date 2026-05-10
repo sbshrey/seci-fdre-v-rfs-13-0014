@@ -18,4 +18,4 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 EXPOSE 8000
 
-CMD ["waitress-serve", "--host=0.0.0.0", "--port=8000", "--call", "seci_fdre_v_model.web.app:create_app"]
+CMD ["sh", "-c", "if [ \"$SECI_FDRE_V_STORAGE_BACKEND\" = \"aws\" ]; then seci-fdre-v-worker --poll-seconds 10 & fi; exec waitress-serve --host=0.0.0.0 --port=8000 --call seci_fdre_v_model.web.app:create_app"]
