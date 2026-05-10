@@ -12,6 +12,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
+from urllib.parse import urlencode
 
 from flask import (
     Flask,
@@ -29,6 +30,14 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from seci_fdre_v_model.profile_templates import SUPPORTED_TENDER_PROFILES
 from seci_fdre_v_model.runtime import bundled_root
+from seci_fdre_v_model.web.auth import (
+    AUTH_SESSION_KEY,
+    AuthenticatedUser,
+    auth0_configured,
+    auth0_domain,
+    auth0_partially_configured,
+    is_admin,
+)
 from seci_fdre_v_model.web.models import BackgroundJob
 from seci_fdre_v_model.web.services import (
     StudyCancelledError,
@@ -66,6 +75,7 @@ from seci_fdre_v_model.web.services import (
     store_uploaded_input,
     update_run_status,
 )
+from seci_fdre_v_model.web.storage import build_storage_backend
 
 _study_logger = logging.getLogger("seci_fdre_v_model.web.study")
 _web_logger = logging.getLogger("seci_fdre_v_model.web")
@@ -315,22 +325,91 @@ def create_app(
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     app.config["SESSION_COOKIE_SECURE"] = _env_flag("SECI_FDRE_V_SECURE_COOKIES")
 
+    auth0_enabled = auth0_configured()
+    if auth0_partially_configured():
+        _web_logger.warning(
+            "Auth0 is partially configured; set AUTH0_DOMAIN, AUTH0_CLIENT_ID, and AUTH0_CLIENT_SECRET."
+        )
+
     basic_auth_user = os.environ.get("SECI_FDRE_V_BASIC_AUTH_USER") or ""
     basic_auth_password = os.environ.get("SECI_FDRE_V_BASIC_AUTH_PASSWORD") or ""
-    basic_auth_enabled = bool(basic_auth_user and basic_auth_password)
-    if (basic_auth_user or basic_auth_password) and not basic_auth_enabled:
+    basic_auth_enabled = bool(basic_auth_user and basic_auth_password) and not auth0_enabled
+    if not auth0_enabled and (basic_auth_user or basic_auth_password) and not basic_auth_enabled:
         _web_logger.warning(
             "Basic auth is partially configured; set both SECI_FDRE_V_BASIC_AUTH_USER and "
             "SECI_FDRE_V_BASIC_AUTH_PASSWORD to enable it."
         )
 
-    def workspace():
-        return ensure_workspace_ready(
-            app.config.get("WORKSPACE_ROOT"),
-            source_config_path=app.config.get("SOURCE_CONFIG_PATH"),
+    storage_backend = build_storage_backend(
+        workspace_root,
+        source_config_path=source_config_path,
+        multi_user=auth0_enabled,
+    )
+    if storage_backend.name == "aws" and not auth0_enabled:
+        raise RuntimeError("Auth0 must be configured when SECI_FDRE_V_STORAGE_BACKEND=aws.")
+
+    auth0_client = None
+    if auth0_enabled:
+        try:
+            from authlib.integrations.flask_client import OAuth
+        except ImportError as exc:  # pragma: no cover - exercised only when auth0 mode lacks deps
+            raise RuntimeError("Install authlib to use Auth0 login.") from exc
+        oauth = OAuth(app)
+        domain = auth0_domain()
+        auth0_client = oauth.register(
+            "auth0",
+            client_id=os.environ["AUTH0_CLIENT_ID"],
+            client_secret=os.environ["AUTH0_CLIENT_SECRET"],
+            server_metadata_url=f"https://{domain}/.well-known/openid-configuration",
+            client_kwargs={"scope": "openid profile email"},
         )
 
+    public_base_url = (os.environ.get("SECI_FDRE_V_PUBLIC_BASE_URL") or "").rstrip("/")
+
+    def external_url(endpoint: str, **values: Any) -> str:
+        if public_base_url:
+            return public_base_url + url_for(endpoint, **values)
+        return url_for(endpoint, _external=True, **values)
+
+    def current_user() -> AuthenticatedUser | None:
+        return AuthenticatedUser.from_session(session.get(AUTH_SESSION_KEY))
+
+    def workspace():
+        return storage_backend.workspace_for_user(current_user())
+
+    def sync_workspace(state: Any) -> None:
+        storage_backend.sync_workspace_after_mutation(current_user(), state)
+
     job_manager = StudyJobManager(workspace)
+
+    def current_job() -> BackgroundJob | None:
+        if storage_backend.uses_external_worker:
+            user = current_user()
+            if user is None:
+                return None
+            return storage_backend.current_job(user)
+        return job_manager.current_job()
+
+    def list_records() -> list[Any]:
+        if storage_backend.uses_external_worker:
+            return storage_backend.list_run_records(current_user())
+        return list_run_records(workspace())
+
+    def latest_record() -> Any:
+        if storage_backend.uses_external_worker:
+            return storage_backend.get_latest_run_record(current_user())
+        return get_latest_run_record(workspace())
+
+    def get_record(run_id: str) -> Any:
+        if storage_backend.uses_external_worker:
+            return storage_backend.get_run_record(current_user(), run_id)
+        return get_run_record(workspace(), run_id)
+
+    def delete_record(run_id: str) -> None:
+        if storage_backend.uses_external_worker:
+            storage_backend.delete_run(current_user(), run_id)
+        else:
+            job_manager.delete(run_id)
 
     def valid_basic_credentials(username: str, password: str) -> bool:
         return hmac.compare_digest(username, basic_auth_user) and hmac.compare_digest(password, basic_auth_password)
@@ -353,6 +432,14 @@ def create_app(
 
     @app.before_request
     def require_basic_auth() -> Response | None:
+        if auth0_enabled:
+            if request.endpoint in {"health", "login", "auth0_callback", "static"}:
+                return None
+            if current_user() is not None:
+                return None
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "Authentication required."}), 401
+            return redirect(url_for("login"))
         if not basic_auth_enabled:
             return None
         if request.endpoint in {"health", "login", "logout", "static"}:
@@ -381,11 +468,17 @@ def create_app(
     def inject_nav_context() -> dict[str, Any]:
         state = workspace()
         selected = normalize_study_profile(session.get("study_profile"))
+        user = current_user()
         return {
             "workspace_root": str(state.root),
-            "current_job": job_manager.current_job(),
+            "current_job": current_job(),
             "selected_study_profile": selected,
-            "auth_enabled": basic_auth_enabled,
+            "auth_enabled": basic_auth_enabled or auth0_enabled,
+            "auth0_enabled": auth0_enabled,
+            "current_user": user,
+            "sharing_enabled": storage_backend.supports_sharing and user is not None,
+            "is_admin": is_admin(user),
+            "storage_backend": storage_backend.name,
         }
 
     @app.get("/health")
@@ -395,6 +488,11 @@ def create_app(
 
     @app.route("/login", methods=["GET", "POST"])
     def login() -> str | Response:
+        if auth0_enabled:
+            if current_user() is not None:
+                return redirect(url_for("index"))
+            assert auth0_client is not None
+            return auth0_client.authorize_redirect(redirect_uri=external_url("auth0_callback"))
         if not basic_auth_enabled:
             return redirect(url_for("index"))
         if request.method == "POST":
@@ -410,9 +508,31 @@ def create_app(
             return redirect(url_for("index"))
         return render_template("login.html", error=None)
 
+    @app.get("/callback")
+    def auth0_callback() -> Response:
+        if not auth0_enabled or auth0_client is None:
+            return redirect(url_for("index"))
+        token = auth0_client.authorize_access_token()
+        claims = token.get("userinfo")
+        if claims is None:
+            claims = auth0_client.userinfo(token=token)
+        user = AuthenticatedUser.from_claims(dict(claims))
+        session[AUTH_SESSION_KEY] = user.to_session()
+        workspace()
+        return redirect(url_for("index"))
+
     @app.post("/logout")
     def logout() -> Response:
         session.clear()
+        if auth0_enabled:
+            domain = auth0_domain()
+            query = urlencode(
+                {
+                    "returnTo": external_url("index"),
+                    "client_id": os.environ.get("AUTH0_CLIENT_ID", ""),
+                }
+            )
+            return redirect(f"https://{domain}/v2/logout?{query}")
         if basic_auth_enabled:
             session[BASIC_AUTH_LOGGED_OUT_KEY] = True
             return redirect(url_for("login"))
@@ -434,8 +554,7 @@ def create_app(
 
     @app.get("/")
     def index() -> str | Response:
-        state = workspace()
-        latest = get_latest_run_record(state)
+        latest = latest_record()
         if latest is None:
             return render_dashboard(None)
         return redirect(url_for("run_dashboard", run_id=latest.run_id))
@@ -456,6 +575,7 @@ def create_app(
         state = workspace()
         try:
             save_project_form(state, request.form.to_dict())
+            sync_workspace(state)
             flash("Configuration saved.", "success")
         except Exception as exc:
             flash(f"Failed to save configuration: {exc}", "error")
@@ -477,6 +597,7 @@ def create_app(
         try:
             upload = request.files.get("file")
             store_uploaded_input(state, input_key, upload)
+            sync_workspace(state)
             flash("Input file uploaded.", "success")
         except Exception as exc:
             flash(f"Upload failed: {exc}", "error")
@@ -496,6 +617,7 @@ def create_app(
         state = workspace()
         try:
             generate_active_inputs(state)
+            sync_workspace(state)
             flash("Tender-derived input files generated in the workspace.", "success")
         except Exception as exc:
             flash(f"Failed to generate input files: {exc}", "error")
@@ -506,6 +628,7 @@ def create_app(
         state = workspace()
         try:
             apply_ideal_study_preset(state)
+            sync_workspace(state)
             flash("Ideal 1 MW preset applied (simulation + sensitivity). Inputs paths stay on workspace CSVs.", "success")
         except Exception as exc:
             flash(f"Failed to apply ideal preset: {exc}", "error")
@@ -514,7 +637,7 @@ def create_app(
     @app.post("/runs/ideal-tile-profiles")
     def ideal_tile_profiles() -> Response:
         state = workspace()
-        job = job_manager.current_job()
+        job = current_job()
         if job is not None and job.is_active:
             flash("Stop the running study before tiling full-year solar/wind.", "error")
             return redirect(request.referrer or url_for("inputs_page"))
@@ -522,6 +645,7 @@ def create_app(
             solar_scale = float(request.form.get("solar_scale") or 1.0)
             wind_scale = float(request.form.get("wind_scale") or 1.0)
             ideal_tile_generation_profiles(state, solar_scale=solar_scale, wind_scale=wind_scale)
+            sync_workspace(state)
             flash("Solar and wind tiled across the simulation horizon (workspace solar.csv / wind.csv updated).", "success")
         except Exception as exc:
             flash(f"Failed to tile profiles: {exc}", "error")
@@ -544,7 +668,7 @@ def create_app(
     @app.post("/runs/apply-alignment-renewables")
     def apply_alignment_renewables_route() -> Response:
         state = workspace()
-        job = job_manager.current_job()
+        job = current_job()
         if job is not None and job.is_active:
             flash("Stop the running study before changing alignment scales.", "error")
             return redirect(request.referrer or url_for("inputs_page"))
@@ -552,6 +676,7 @@ def create_app(
             raw = request.form.get("excess_fraction") or "0.08"
             excess_fraction = float(raw)
             apply_alignment_renewable_scales(state, excess_fraction=excess_fraction)
+            sync_workspace(state)
             flash("Solar and wind multipliers updated from alignment suggestion.", "success")
         except Exception as exc:
             flash(f"Failed to apply renewable scales: {exc}", "error")
@@ -560,7 +685,7 @@ def create_app(
     @app.post("/runs/apply-alignment-profile")
     def apply_alignment_profile_route() -> Response:
         state = workspace()
-        job = job_manager.current_job()
+        job = current_job()
         if job is not None and job.is_active:
             flash("Stop the running study before changing alignment scales.", "error")
             return redirect(request.referrer or url_for("inputs_page"))
@@ -568,6 +693,7 @@ def create_app(
             raw = request.form.get("excess_fraction") or "0.08"
             excess_fraction = float(raw)
             apply_alignment_profile_scale(state, excess_fraction=excess_fraction)
+            sync_workspace(state)
             flash("Profile multiplier updated from alignment suggestion.", "success")
         except Exception as exc:
             flash(f"Failed to apply profile scale: {exc}", "error")
@@ -578,9 +704,13 @@ def create_app(
         try:
             profile = normalize_study_profile(request.form.get("study_profile"))
             session["study_profile"] = profile
-            job = job_manager.start(dump_sections=False, study_profile=profile)
+            if storage_backend.uses_external_worker:
+                job = storage_backend.queue_study(current_user(), study_profile=profile)
+            else:
+                job = job_manager.start(dump_sections=False, study_profile=profile)
             label = "Ideal 1 MW example" if profile == "ideal_1mw" else "Workspace"
-            flash(f"Study started ({label} config). Run ID: {job.run_id}", "success")
+            verb = "queued" if storage_backend.uses_external_worker else "started"
+            flash(f"Study {verb} ({label} config). Run ID: {job.run_id}", "success")
         except Exception as exc:
             flash(str(exc), "error")
         return _redirect_back()
@@ -588,7 +718,7 @@ def create_app(
     @app.post("/jobs/current/cancel")
     def cancel_current_job() -> Response:
         try:
-            job = job_manager.request_cancel()
+            job = storage_backend.request_cancel(current_user()) if storage_backend.uses_external_worker else job_manager.request_cancel()
             flash(f"Cancellation requested for run {job.run_id}.", "success")
         except Exception as exc:
             flash(str(exc), "error")
@@ -597,7 +727,7 @@ def create_app(
     @app.post("/runs/<run_id>/delete")
     def delete_run(run_id: str) -> Response:
         try:
-            job_manager.delete(run_id)
+            delete_record(run_id)
             flash(f"Deleted run {run_id}.", "success")
         except Exception as exc:
             flash(str(exc), "error")
@@ -606,9 +736,52 @@ def create_app(
             return redirect(next_target)
         return redirect(url_for("runs_page"))
 
+    @app.post("/runs/<run_id>/copy")
+    def copy_run(run_id: str) -> Response:
+        if not storage_backend.supports_sharing:
+            flash("Run sharing is available only in hosted AWS storage mode.", "error")
+            return redirect(request.referrer or url_for("runs_page"))
+        try:
+            result = storage_backend.copy_run_to_email(current_user(), run_id, request.form.get("recipient_email", ""))
+            if result["status"] == "pending":
+                flash(f"Run copy staged for {result['recipient_email']}. It will appear after their first login.", "success")
+            else:
+                flash(f"Run copied to {result['recipient_email']}.", "success")
+        except Exception as exc:
+            flash(f"Failed to copy run: {exc}", "error")
+        return redirect(request.referrer or url_for("runs_page"))
+
+    @app.get("/admin/runs")
+    def admin_runs_page() -> str | Response:
+        if not storage_backend.supports_sharing or not is_admin(current_user()):
+            flash("Admin access required.", "error")
+            return redirect(url_for("runs_page"))
+        return render_template(
+            "admin_runs.html",
+            active_page="runs",
+            run_records=storage_backend.admin_run_records(current_user()),
+        )
+
+    @app.post("/admin/runs/<owner_key>/<run_id>/copy")
+    def admin_copy_run(owner_key: str, run_id: str) -> Response:
+        if not storage_backend.supports_sharing or not is_admin(current_user()):
+            flash("Admin access required.", "error")
+            return redirect(url_for("runs_page"))
+        try:
+            result = storage_backend.copy_run_to_email(
+                current_user(),
+                run_id,
+                request.form.get("recipient_email", ""),
+                source_owner_key=owner_key,
+            )
+            flash(f"Run copy {result['status']} for {result['recipient_email']}.", "success")
+        except Exception as exc:
+            flash(f"Failed to copy run: {exc}", "error")
+        return redirect(url_for("admin_runs_page"))
+
     @app.get("/api/job-status")
     def api_job_status() -> Response:
-        job = job_manager.current_job()
+        job = current_job()
         if job is None:
             return jsonify({"job": None, "can_start": True})
         return jsonify(
@@ -638,18 +811,16 @@ def create_app(
 
     @app.get("/runs")
     def runs_page() -> str:
-        state = workspace()
         return render_template(
             "runs.html",
             active_page="runs",
-            run_records=list_run_records(state),
+            run_records=list_records(),
         )
 
     @app.get("/runs/<run_id>")
     def run_dashboard(run_id: str) -> str | Response:
-        state = workspace()
         try:
-            record = get_run_record(state, run_id)
+            record = get_record(run_id)
         except FileNotFoundError:
             flash("Run not found.", "error")
             return redirect(url_for("runs_page"))
@@ -657,9 +828,8 @@ def create_app(
 
     @app.get("/runs/<run_id>/artifacts/<path:relative_path>")
     def download_artifact(run_id: str, relative_path: str) -> Response:
-        state = workspace()
         try:
-            record = get_run_record(state, run_id)
+            record = get_record(run_id)
             path = resolve_run_artifact(record, relative_path)
         except Exception:
             flash("Artifact not found.", "error")
@@ -668,9 +838,8 @@ def create_app(
 
     @app.get("/api/charts/<run_id>/<path:dataset>")
     def api_charts(run_id: str, dataset: str) -> Response:
-        state = workspace()
         try:
-            record = get_run_record(state, run_id)
+            record = get_record(run_id)
         except FileNotFoundError:
             return jsonify({"error": "Run not found"}), 404
 
@@ -702,8 +871,8 @@ def create_app(
         )
 
     def render_dashboard(record: Any) -> str:
-        state = workspace()
-        run_records = list_run_records(state)
+        run_records = list_records()
+        job = current_job()
         if record is None:
             return render_template(
                 "dashboard.html",
@@ -717,15 +886,15 @@ def create_app(
                 compliance_rows=[],
                 case_rows=[],
                 cross_rows=[],
-            chart_cards=[],
-            chart_options=[],
-            selected_chart_dataset=None,
-            preview=None,
-            preview_artifact=None,
-            can_start_study=job_manager.current_job() is None or not job_manager.current_job().is_active,
-            artifact_label=artifact_label,
-            dataset_label=dataset_label,
-        )
+                chart_cards=[],
+                chart_options=[],
+                selected_chart_dataset=None,
+                preview=None,
+                preview_artifact=None,
+                can_start_study=job is None or not job.is_active,
+                artifact_label=artifact_label,
+                dataset_label=dataset_label,
+            )
 
         preview_artifact = request.args.get("artifact") or default_preview_artifact(record)
         selected_chart_dataset = request.args.get("chart_dataset")
@@ -770,7 +939,7 @@ def create_app(
             selected_chart_dataset=selected_chart_dataset,
             preview=preview,
             preview_artifact=preview_artifact,
-            can_start_study=job_manager.current_job() is None or not job_manager.current_job().is_active,
+            can_start_study=job is None or not job.is_active,
             artifact_label=artifact_label,
             dataset_label=dataset_label,
         )

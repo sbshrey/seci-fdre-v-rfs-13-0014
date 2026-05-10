@@ -138,6 +138,40 @@ Each run writes to `output/<plant_name>/`:
 
 The control-room workflow writes immutable run packages to `.workspace/runs/<run_id>/package/` instead of overwriting prior runs.
 
+## Hosted Auth0 + AWS Storage
+
+For a multi-user hosted deployment, set `SECI_FDRE_V_STORAGE_BACKEND=aws`. In that mode Auth0 is required, the web container stores active workspaces in S3/DynamoDB, and model execution is handled by the `seci-fdre-v-worker` process instead of an in-process Flask thread.
+
+Required environment:
+
+```bash
+SECI_FDRE_V_STORAGE_BACKEND=aws
+SECI_FDRE_V_S3_BUCKET=<private-bucket>
+SECI_FDRE_V_DDB_TABLE_PREFIX=SeciFdreV
+AWS_REGION=ap-south-1
+AUTH0_DOMAIN=<tenant>.auth0.com
+AUTH0_CLIENT_ID=<client-id>
+AUTH0_CLIENT_SECRET=<client-secret>
+SECI_FDRE_V_SECRET_KEY=<random-secret>
+SECI_FDRE_V_PUBLIC_BASE_URL=https://<host>
+SECI_FDRE_V_ADMIN_EMAILS=admin@example.com
+```
+
+Create these DynamoDB tables before starting hosted mode:
+
+- `SeciFdreVUsers`: partition key `user_key` (String)
+- `SeciFdreVRuns`: partition key `owner_key` (String), sort key `run_id` (String)
+- `SeciFdreVArtifactSets`: partition key `artifact_set_id` (String)
+- `SeciFdreVShares`: partition key `share_id` (String)
+
+S3 stores active workspace objects under `users/<user_key>/workspace/` and immutable run artifacts under `artifact-sets/<artifact_set_id>/`. Completed run copies are logical copies: the recipient gets a separate run record that points at the same immutable artifact set, so no model rerun or S3 object duplication is needed.
+
+With Docker Compose, the normal `web` service still defaults to local mode. To run the hosted worker alongside an AWS-configured web container:
+
+```bash
+SECI_FDRE_V_STORAGE_BACKEND=aws docker compose --profile aws up --build
+```
+
 ## Windows Portable Build
 
 Build the Windows distribution on a Windows machine:

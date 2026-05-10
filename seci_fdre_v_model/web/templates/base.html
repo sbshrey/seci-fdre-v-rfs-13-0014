@@ -12,12 +12,18 @@
         <p class="eyebrow">Docker Compose Control Room</p>
         <h1><a href="{{ url_for('index') }}">SECI FDRE-V Local Workspace</a></h1>
         <p class="workspace-note">{{ workspace_root }}</p>
+        {% if current_user %}
+          <p class="workspace-note">{{ current_user.email }} · {{ storage_backend }}</p>
+        {% endif %}
       </div>
       <nav class="topnav">
         <a href="{{ url_for('index') }}" class="{% if active_page == 'dashboard' %}active{% endif %}">Dashboard</a>
         <a href="{{ url_for('config_page') }}" class="{% if active_page == 'config' %}active{% endif %}">Config</a>
         <a href="{{ url_for('inputs_page') }}" class="{% if active_page == 'inputs' %}active{% endif %}">Inputs</a>
         <a href="{{ url_for('runs_page') }}" class="{% if active_page == 'runs' %}active{% endif %}">History</a>
+        {% if is_admin and sharing_enabled %}
+        <a href="{{ url_for('admin_runs_page') }}">Admin</a>
+        {% endif %}
         {% if auth_enabled %}
         <form method="post" action="{{ url_for('logout') }}">
           <button class="nav-button" type="submit">Log out</button>

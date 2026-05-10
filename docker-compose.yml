@@ -9,6 +9,15 @@ services:
     environment:
       SECI_FDRE_V_WORKSPACE: /workspace
       SECI_FDRE_V_SOURCE_CONFIG: /app/config/project.yaml
+      SECI_FDRE_V_STORAGE_BACKEND: ${SECI_FDRE_V_STORAGE_BACKEND:-local}
+      SECI_FDRE_V_S3_BUCKET: ${SECI_FDRE_V_S3_BUCKET:-}
+      SECI_FDRE_V_DDB_TABLE_PREFIX: ${SECI_FDRE_V_DDB_TABLE_PREFIX:-SeciFdreV}
+      AWS_REGION: ${AWS_REGION:-ap-south-1}
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN:-}
+      AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID:-}
+      AUTH0_CLIENT_SECRET: ${AUTH0_CLIENT_SECRET:-}
+      SECI_FDRE_V_PUBLIC_BASE_URL: ${SECI_FDRE_V_PUBLIC_BASE_URL:-}
+      SECI_FDRE_V_ADMIN_EMAILS: ${SECI_FDRE_V_ADMIN_EMAILS:-}
     volumes:
       - type: bind
         source: ./.workspace
@@ -26,3 +35,16 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+  worker:
+    profiles: ["aws"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["seci-fdre-v-worker", "--poll-seconds", "10"]
+    environment:
+      SECI_FDRE_V_STORAGE_BACKEND: aws
+      SECI_FDRE_V_SOURCE_CONFIG: /app/config/project.yaml
+      SECI_FDRE_V_S3_BUCKET: ${SECI_FDRE_V_S3_BUCKET}
+      SECI_FDRE_V_DDB_TABLE_PREFIX: ${SECI_FDRE_V_DDB_TABLE_PREFIX:-SeciFdreV}
+      AWS_REGION: ${AWS_REGION:-ap-south-1}
+    restart: unless-stopped

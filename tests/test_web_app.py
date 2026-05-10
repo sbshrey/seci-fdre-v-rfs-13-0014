@@ -11,12 +11,14 @@ import polars as pl
 import yaml
 
 from seci_fdre_v_model.web.app import create_app
+from seci_fdre_v_model.web.auth import AuthenticatedUser
 from seci_fdre_v_model.web.services import (
     create_run_snapshot,
     ensure_workspace_ready,
     load_project_config,
     save_project_form,
 )
+from seci_fdre_v_model.web.storage import LocalStorageBackend
 
 
 def test_workspace_bootstrap_and_form_save(tmp_path: Path) -> None:
@@ -70,6 +72,32 @@ def test_workspace_bootstrap_and_form_save(tmp_path: Path) -> None:
     reloaded = load_project_config(workspace)
     assert reloaded.inputs.solar_path == workspace.inputs_dir / "solar.csv"
     assert reloaded.inputs.output_profile_path == workspace.inputs_dir / "output_profile.csv"
+
+
+def test_local_multi_user_backend_isolates_workspaces(tmp_path: Path) -> None:
+    source_config = _write_project_config(tmp_path)
+    backend = LocalStorageBackend(workspace_root=tmp_path / ".workspace", source_config_path=source_config, multi_user=True)
+    user_a = AuthenticatedUser.from_claims({"sub": "auth0|a", "email": "a@example.com", "name": "A"})
+    user_b = AuthenticatedUser.from_claims({"sub": "auth0|b", "email": "b@example.com", "name": "B"})
+
+    workspace_a = backend.workspace_for_user(user_a)
+    workspace_b = backend.workspace_for_user(user_b)
+
+    assert workspace_a.root != workspace_b.root
+    assert workspace_a.root.parent == workspace_b.root.parent
+    save_project_form(
+        workspace_a,
+        {
+            "project.plant_name": "private_a",
+            "project.simulation_start": "2025-01-01 00:00",
+            "project.simulation_end": "2025-01-01 00:05",
+            "simulation.data.solar_enabled": "on",
+            "simulation.data.wind_enabled": "on",
+        },
+    )
+
+    assert load_project_config(workspace_a).project.plant_name == "private_a"
+    assert load_project_config(workspace_b).project.plant_name == "test_plant"
 
 
 def test_web_control_room_flow(tmp_path: Path) -> None:

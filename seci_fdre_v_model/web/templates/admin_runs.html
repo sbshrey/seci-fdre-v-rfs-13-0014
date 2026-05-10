@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Admin Runs | SECI FDRE-V Control Room{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Admin</p>
+    <h2>All Runs</h2>
+    <p class="section-note">Copy completed hosted runs between Auth0 users without rerunning the model.</p>
+  </div>
+</section>
+
+<article class="panel">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Owner</th>
+          <th>Run ID</th>
+          <th>Status</th>
+          <th>Plant</th>
+          <th>Started</th>
+          <th>Artifacts</th>
+          <th>Copy</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in run_records %}
+          <tr>
+            <td>{{ run.owner_email or run.owner_key }}</td>
+            <td>{{ run.run_id }}</td>
+            <td>{{ run.status }}</td>
+            <td>{{ run.plant_name }}</td>
+            <td>{{ run.started_at }}</td>
+            <td>{{ run.artifacts | length }}</td>
+            <td>
+              {% if run.status == 'completed' %}
+                <form method="post" action="{{ url_for('admin_copy_run', owner_key=run.owner_key, run_id=run.run_id) }}" class="inline-form">
+                  <input name="recipient_email" type="email" placeholder="recipient@example.com" required>
+                  <button class="button button-ghost" type="submit">Copy</button>
+                </form>
+              {% else %}
+                <span class="panel-note">Not completed</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</article>
+{% endblock %}

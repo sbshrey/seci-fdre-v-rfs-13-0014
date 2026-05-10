@@ -43,6 +43,12 @@
             <td>{{ run.artifacts | length }}</td>
             <td>
               {% if not current_job or current_job.run_id != run.run_id or not current_job.is_active %}
+                {% if sharing_enabled and run.status == 'completed' %}
+                  <form method="post" action="{{ url_for('copy_run', run_id=run.run_id) }}" class="inline-form">
+                    <input name="recipient_email" type="email" placeholder="recipient@example.com" required>
+                    <button class="button button-ghost" type="submit">Copy</button>
+                  </form>
+                {% endif %}
                 <form method="post" action="{{ url_for('delete_run', run_id=run.run_id) }}">
                   <input type="hidden" name="next" value="{{ url_for('runs_page') }}">
                   <button class="button button-danger button-subtle" type="submit">Delete</button>

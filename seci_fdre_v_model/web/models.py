@@ -57,6 +57,10 @@ class RunRecord:
     artifacts: list[RunArtifactIndex] = field(default_factory=list)
     summary_metrics: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
+    owner_key: str | None = None
+    owner_email: str | None = None
+    artifact_set_id: str | None = None
+    copied_from: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

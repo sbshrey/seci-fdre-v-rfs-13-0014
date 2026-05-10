@@ -190,6 +190,18 @@ a {
   align-items: center;
 }
 
+.inline-form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.inline-form input {
+  min-width: 220px;
+}
+
 .panel,
 .metric-card,
 .progress-card {

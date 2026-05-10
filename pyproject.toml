@@ -9,9 +9,12 @@ description = "SECI FDRE-V BESS model with tender-derived input generation and s
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+  "authlib>=1.3.0",
+  "boto3>=1.34.0",
   "Flask>=3.0.0",
   "numpy>=2.0.0",
   "polars>=1.22.0",
+  "requests>=2.32.0",
   "PyYAML>=6.0.2",
   "waitress>=3.0.0",
   "xlsxwriter>=3.2.0",
@@ -31,6 +34,7 @@ windows = [
 seci-fdre-v-model = "seci_fdre_v_model.cli:main"
 seci-fdre-v-desktop = "seci_fdre_v_model.desktop:main"
 seci-fdre-v-web = "seci_fdre_v_model.web.app:main"
+seci-fdre-v-worker = "seci_fdre_v_model.web.worker:main"
 
 [tool.setuptools]
 include-package-data = true
